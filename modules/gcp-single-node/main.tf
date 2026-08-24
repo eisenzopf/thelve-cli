@@ -109,6 +109,21 @@ resource "google_compute_firewall" "telnyx_rtp" {
   }
 }
 
+# Telnyx's default AnchorSite=Latency selection measures round-trip time from
+# its media network with ICMP. Limit echo traffic to the same explicit carrier
+# ranges as RTP so automatic nearest-PoP selection works without opening ICMP
+# globally.
+resource "google_compute_firewall" "telnyx_anchorsite_icmp" {
+  name          = "${local.prefix}-telnyx-icmp"
+  network       = google_compute_network.thelve.name
+  direction     = "INGRESS"
+  source_ranges = var.telnyx_media_cidrs
+  target_tags   = [local.prefix]
+  allow {
+    protocol = "icmp"
+  }
+}
+
 resource "google_compute_firewall" "iap_ssh" {
   count         = var.enable_iap_ssh ? 1 : 0
   name          = "${local.prefix}-iap-ssh"

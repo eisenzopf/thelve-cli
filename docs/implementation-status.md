@@ -12,6 +12,11 @@ workflow pending** · Updated 2026-08-24
 - Strict no-secret deployment intent and validation, including compute
   profiles, exact host-image IDs, Telnyx perimeter inputs, DNS, concurrency,
   and the complete runtime-secret inventory.
+- Dated, CLI-embedded Telnyx US signaling and global media CIDRs for US cloud
+  regions; unsupported regions keep fail-closed review sentinels.
+- GCP and AWS carrier perimeters admit RTP plus AnchorSite ICMP probes only
+  from the explicit Telnyx media profile, preserving automatic nearest-PoP
+  media routing without global ICMP ingress.
 - Embedded GCP and AWS single-node Terraform modules plus byte-identical
   cross-repository compatibility gates.
 - Versioned GCS or encrypted/versioned/locked S3 remote-state bootstrap.

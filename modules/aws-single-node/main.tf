@@ -95,6 +95,20 @@ resource "aws_vpc_security_group_ingress_rule" "telnyx_rtp" {
   cidr_ipv4         = each.value
 }
 
+# Telnyx's default AnchorSite=Latency selection measures round-trip time from
+# its media network with ICMP. Admit all ICMP types/codes only from the exact
+# carrier media ranges; this keeps regional media selection automatic without
+# exposing host-wide ICMP to the Internet.
+resource "aws_vpc_security_group_ingress_rule" "telnyx_anchorsite_icmp" {
+  for_each          = toset(var.telnyx_media_cidrs)
+  security_group_id = aws_security_group.thelve.id
+  description       = "Telnyx AnchorSite latency probe"
+  ip_protocol       = "icmp"
+  from_port         = -1
+  to_port           = -1
+  cidr_ipv4         = each.value
+}
+
 resource "aws_vpc_security_group_ingress_rule" "emergency_ssh" {
   for_each          = toset(var.admin_ssh_cidrs)
   security_group_id = aws_security_group.thelve.id

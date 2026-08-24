@@ -7,6 +7,26 @@ use serde::{Deserialize, Serialize};
 pub const API_VERSION: &str = "thelve.io/v1alpha1";
 pub const KIND: &str = "CloudSingleNode";
 
+// Retrieved from Telnyx's published SIP signaling and media network profile on
+// 2026-08-24. Keeping the retrieval date in deployment intent makes the
+// firewall input auditable and lets operators reject an old CLI profile.
+const TELNYX_NETWORK_PROFILE_VERSION: &str = "telnyx-sip-network-2026-08-24";
+const TELNYX_US_SIGNALING_CIDRS: &[&str] = &["192.76.120.10/32", "64.16.250.10/32"];
+const TELNYX_MEDIA_CIDRS: &[&str] = &[
+    "36.255.198.128/25",
+    "50.114.136.128/25",
+    "50.114.144.0/21",
+    "64.16.226.0/24",
+    "64.16.227.0/24",
+    "64.16.228.0/24",
+    "64.16.229.0/24",
+    "64.16.230.0/24",
+    "64.16.248.0/24",
+    "64.16.249.0/24",
+    "103.115.244.128/25",
+    "185.246.41.128/25",
+];
+
 pub const REQUIRED_SECRET_NAMES: &[&str] = &[
     "database-url",
     "migration-database-url",
@@ -163,6 +183,7 @@ impl CloudDeployment {
         region: String,
         zone: String,
     ) -> Result<Self> {
+        let telnyx_profile = telnyx_network_profile(provider, &region);
         let provider = match provider {
             CloudProvider::Gcp => Provider::Gcp {
                 project_id: project.context("--project is required for provider=gcp")?,
@@ -193,12 +214,18 @@ impl CloudDeployment {
                     prefix: format!("thelve/{name}/test"),
                 },
                 networking: Networking {
-                    telnyx_cidr_source_version: "REPLACE_WITH_CURRENT_SIGNED_NETWORK_PROFILE"
-                        .into(),
-                    telnyx_signaling_cidrs: vec![
-                        "REPLACE_WITH_CURRENT_TELNYX_SIGNALING_CIDR".into(),
-                    ],
-                    telnyx_media_cidrs: vec!["REPLACE_WITH_CURRENT_TELNYX_MEDIA_CIDR".into()],
+                    telnyx_cidr_source_version: telnyx_profile.as_ref().map_or_else(
+                        || "REPLACE_WITH_CURRENT_SIGNED_NETWORK_PROFILE".into(),
+                        |profile| profile.version.into(),
+                    ),
+                    telnyx_signaling_cidrs: telnyx_profile.as_ref().map_or_else(
+                        || vec!["REPLACE_WITH_CURRENT_TELNYX_SIGNALING_CIDR".into()],
+                        |profile| strings(profile.signaling_cidrs),
+                    ),
+                    telnyx_media_cidrs: telnyx_profile.map_or_else(
+                        || vec!["REPLACE_WITH_CURRENT_TELNYX_MEDIA_CIDR".into()],
+                        |profile| strings(profile.media_cidrs),
+                    ),
                     https_source_cidrs: default_https_sources(),
                     sip_port: default_sip_port(),
                     rtp_port_start: default_rtp_start(),
@@ -317,6 +344,29 @@ impl CloudDeployment {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+struct TelnyxNetworkProfile {
+    version: &'static str,
+    signaling_cidrs: &'static [&'static str],
+    media_cidrs: &'static [&'static str],
+}
+
+fn telnyx_network_profile(provider: CloudProvider, region: &str) -> Option<TelnyxNetworkProfile> {
+    let is_us_region = match provider {
+        CloudProvider::Gcp => region.starts_with("us-"),
+        CloudProvider::Aws => region.starts_with("us-"),
+    };
+    is_us_region.then_some(TelnyxNetworkProfile {
+        version: TELNYX_NETWORK_PROFILE_VERSION,
+        signaling_cidrs: TELNYX_US_SIGNALING_CIDRS,
+        media_cidrs: TELNYX_MEDIA_CIDRS,
+    })
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).into()).collect()
 }
 
 fn validate_dns(zone: &str, domains: &BTreeMap<String, String>, field: &str) -> Result<()> {
@@ -446,6 +496,50 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("state.bucket")
         );
+    }
+
+    #[test]
+    fn us_template_embeds_the_auditable_telnyx_network_profile() {
+        let template = CloudDeployment::template(
+            CloudProvider::Gcp,
+            "thelve-test".into(),
+            Some("example-project".into()),
+            "us-west1".into(),
+            "us-west1-b".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            template.spec.networking.telnyx_cidr_source_version,
+            TELNYX_NETWORK_PROFILE_VERSION
+        );
+        assert_eq!(
+            template.spec.networking.telnyx_signaling_cidrs,
+            strings(TELNYX_US_SIGNALING_CIDRS)
+        );
+        assert_eq!(
+            template.spec.networking.telnyx_media_cidrs,
+            strings(TELNYX_MEDIA_CIDRS)
+        );
+    }
+
+    #[test]
+    fn unsupported_region_keeps_telnyx_networking_fail_closed() {
+        let template = CloudDeployment::template(
+            CloudProvider::Gcp,
+            "thelve-test".into(),
+            Some("example-project".into()),
+            "asia-southeast1".into(),
+            "asia-southeast1-b".into(),
+        )
+        .unwrap();
+        assert!(
+            template
+                .spec
+                .networking
+                .telnyx_cidr_source_version
+                .starts_with("REPLACE")
+        );
+        assert!(template.validate().is_err());
     }
 
     #[test]

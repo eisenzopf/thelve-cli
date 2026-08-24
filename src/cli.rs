@@ -476,7 +476,7 @@ pub fn execute(cli: Cli) -> Result<()> {
                 config::write_new(&output, &intent)?;
                 println!("wrote non-secret deployment intent to {}", output.display());
                 println!(
-                    "edit the host image, state bucket, domains, and current Telnyx CIDRs before planning"
+                    "edit the host image, state bucket, and domains; review the dated Telnyx network profile before planning"
                 );
                 Ok(())
             }

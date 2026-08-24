@@ -59,9 +59,16 @@ thelve deploy init --provider gcp --name thelve-test \
 ```
 
 Edit `deployment.yaml`. Select the exact GCP image only from a verified machine
-catalog, use a globally unique state bucket, enter the current signed Telnyx
-signaling/media network profile, and set `provider.dnsManagedZone` plus the
+catalog, use a globally unique state bucket, review the CLI-embedded dated
+Telnyx signaling/media network profile, and set `provider.dnsManagedZone` plus the
 `app`, `api`, `media`, and `sip` domains when the module manages Cloud DNS.
+US cloud regions receive the audited US profile automatically; unsupported
+regions remain fail-closed with `REPLACE` sentinels until an operator supplies a
+reviewed regional profile.
+The cloud perimeter also admits ICMP only from those explicit Telnyx media
+ranges. Telnyx uses those probes for its default latency-based AnchorSite
+selection, so media follows the nearest healthy carrier PoP without exposing
+ICMP to the public Internet.
 Set `provider.opsAgentPackage` only with a reviewed immutable HTTPS package and
 SHA-256; omit it to keep provider-native export disabled.
 Then:
