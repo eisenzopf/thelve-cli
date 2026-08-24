@@ -261,7 +261,7 @@ pub fn activate_gcp(
             &config_sha,
             &registry.host,
         );
-        let output = process::capture(&ssh_base(remote_command))?;
+        let output = process::capture_named(&ssh_base(remote_command), "remote GCP activation")?;
         let mut receipt: Value =
             serde_json::from_str(&output).context("remote activation receipt is not JSON")?;
         if receipt.get("schemaVersion").and_then(Value::as_str)
@@ -379,19 +379,24 @@ fn remote_activation_command(
     registry_host: &str,
 ) -> String {
     format!(
-        r#"set -euo pipefail
+        r#"set -Eeuo pipefail
 umask 077
 ulimit -n 65536
 stage={stage}
 registry_host={registry_host}
-cleanup() {{ rm -rf -- "$stage"; }}
+activation_stage=initialization
+cleanup() {{ rm -rf -- "$stage" || true; }}
+failure() {{ code=$?; printf 'Thelve activation failed at stage %s (exit %s)\n' "$activation_stage" "$code" >&2; exit "$code"; }}
 sudo_node() {{ sudo sh -c 'ulimit -n 65536; exec "$@"' thelve-node "$@"; }}
+trap failure ERR
 trap cleanup EXIT
+activation_stage=verify-artifact-digests
 printf '%s  %s\n' {node_sha} "$stage/thelve-node" | sha256sum --check --strict - >/dev/null
 printf '%s  %s\n' {bundle_sha} "$stage/bundle.tar.gz" | sha256sum --check --strict - >/dev/null
 printf '%s  %s\n' {trust_sha} "$stage/offline-trust.json" | sha256sum --check --strict - >/dev/null
 printf '%s  %s\n' {config_sha} "$stage/node.yaml" | sha256sum --check --strict - >/dev/null
 chmod 0700 "$stage/thelve-node"
+activation_stage=inspect-bundle
 tar -tzf "$stage/bundle.tar.gz" > "$stage/bundle.list"
 tar -tvzf "$stage/bundle.tar.gz" > "$stage/bundle.verbose"
 test -s "$stage/bundle.list"
@@ -401,9 +406,13 @@ awk 'index($0, "/../") || $0 ~ /^\.\.\// || $0 ~ /^\// || $0 !~ /^bundle\// {{ e
 awk 'substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d" {{ exit 1 }}' "$stage/bundle.verbose"
 mkdir "$stage/release"
 tar --no-same-owner --no-same-permissions -xzf "$stage/bundle.tar.gz" -C "$stage/release"
+activation_stage=verify-release
 sudo_node "$stage/thelve-node" verify --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/verify.json"
+activation_stage=activation-preflight
 sudo_node "$stage/thelve-node" preflight --activation --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/preflight.json"
+activation_stage=install-release
 sudo_node "$stage/thelve-node" install --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" --operation-id {operation_id} > "$stage/install.json"
+activation_stage=configure-registry
 test -x /usr/local/bin/docker-credential-gcr
 sudo grep -Fqx 'Environment=DOCKER_CONFIG=/etc/thelve/docker' /etc/systemd/system/thelve.service
 sudo install -d -o root -g root -m 0700 /etc/thelve/docker
@@ -411,9 +420,13 @@ sudo grep -Fqx 'Environment=PATH=/usr/local/bin:/usr/bin:/bin' /etc/systemd/syst
 sudo env HOME=/root DOCKER_CONFIG=/etc/thelve/docker PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/docker-credential-gcr configure-docker --registries="$registry_host" >/dev/null
 sudo jq -e --arg host "$registry_host" 'keys == ["credHelpers"] and (.credHelpers | length == 1) and .credHelpers[$host] == "gcr"' /etc/thelve/docker/config.json >/dev/null
 test "$(sudo stat -c '%U:%G:%a' /etc/thelve/docker/config.json)" = root:root:600
+activation_stage=materialize-secrets
 sudo_node /opt/thelve/bin/thelve-node activate-secrets --config /etc/thelve/node.yaml > "$stage/secrets.json"
+activation_stage=start-services
 sudo_node /opt/thelve/bin/thelve-node start > "$stage/start.json"
+activation_stage=verify-readiness
 sudo_node /opt/thelve/bin/thelve-node readiness > "$stage/readiness.json"
+activation_stage=render-receipt
 jq -n --arg operationId {operation_id} --arg registryHost "$registry_host" --slurpfile verify "$stage/verify.json" --slurpfile preflight "$stage/preflight.json" --slurpfile install "$stage/install.json" --slurpfile secrets "$stage/secrets.json" --slurpfile start "$stage/start.json" --slurpfile readiness "$stage/readiness.json" '{{schemaVersion:"thelve.gcp-activation-receipt/v1",operationId:$operationId,verification:$verify[0],preflight:$preflight[0],install:$install[0],secretActivation:$secrets[0],registryAccess:{{host:$registryHost,credentialHelper:"docker-credential-gcr",dockerConfig:"/etc/thelve/docker/config.json",accessTokenPersisted:false}},serviceAction:$start[0],readiness:$readiness[0],secretValuesRecorded:false}}'"#
     )
 }
@@ -660,6 +673,9 @@ mod tests {
         assert!(command.contains("ulimit -n 65536"));
         assert!(command.contains("sudo_node()"));
         assert!(!command.contains("sudo \"$stage/thelve-node\" preflight"));
+        assert!(command.contains("activation_stage=activation-preflight"));
+        assert!(command.contains("activation_stage=start-services"));
+        assert!(command.contains("Thelve activation failed at stage"));
         assert!(command.contains("secretValuesRecorded:false"));
         assert!(!command.contains("api-key"));
         assert!(!command.contains("oauth2accesstoken"));

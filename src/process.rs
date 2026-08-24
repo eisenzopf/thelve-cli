@@ -3,6 +3,8 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
+const MAX_CAPTURED_ERROR_BYTES: usize = 4_096;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandPlan {
     pub program: String,
@@ -52,6 +54,27 @@ pub fn capture(plan: &CommandPlan) -> Result<String> {
     String::from_utf8(output.stdout).context("command emitted non-UTF-8 output")
 }
 
+/// Capture a command whose arguments are too large or sensitive for error
+/// diagnostics. Only the caller-supplied safe label and a bounded stderr tail
+/// are retained on failure.
+pub fn capture_named(plan: &CommandPlan, label: &str) -> Result<String> {
+    let output = Command::new(&plan.program)
+        .args(&plan.args)
+        .stdin(Stdio::null())
+        .output()
+        .with_context(|| format!("execute {label}"))?;
+    if !output.status.success() {
+        let start = output.stderr.len().saturating_sub(MAX_CAPTURED_ERROR_BYTES);
+        let stderr = String::from_utf8_lossy(&output.stderr[start..]);
+        let detail = stderr.trim();
+        if detail.is_empty() {
+            bail!("{label} failed with {}", output.status);
+        }
+        bail!("{label} failed: {detail}");
+    }
+    String::from_utf8(output.stdout).with_context(|| format!("{label} emitted non-UTF-8 output"))
+}
+
 pub fn inherit(plan: &CommandPlan) -> Result<()> {
     let status = Command::new(&plan.program)
         .args(&plan.args)
@@ -88,4 +111,24 @@ pub fn with_secret_stdin(plan: &CommandPlan, stdin: &[u8]) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_capture_does_not_repeat_command_arguments() {
+        let plan = CommandPlan::new("sh").args([
+            "-c",
+            "printf 'safe-stage-marker\\n' >&2; exit 9",
+            "argument-that-must-not-be-reported",
+        ]);
+        let error = capture_named(&plan, "remote activation")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("remote activation failed"));
+        assert!(error.contains("safe-stage-marker"));
+        assert!(!error.contains("argument-that-must-not-be-reported"));
+    }
 }
