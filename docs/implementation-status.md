@@ -1,9 +1,8 @@
 # Thelve CLI implementation status
 
-Overall status: **Partial — local core, signed GCP preview retrieval, and
-qualified-image infrastructure reconciliation are live-validated; public
-binary, application activation, and Telnyx workflow remain** · Updated
-2026-08-24
+Overall status: **Partial — the public hosted CLI repository and its verification
+workflow are live; signed binary publication, application activation, and the
+Telnyx workflow remain** · Updated 2026-08-24
 
 ## Implemented
 
@@ -63,11 +62,19 @@ binary, application activation, and Telnyx workflow remain** · Updated
   was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
+- Public repository `https://github.com/eisenzopf/thelve-cli` hosts `main`; its
+  first standard-runner verification passed every Rust, Terraform and
+  no-secret job. Repository defaults are read-only Actions tokens, squash-only
+  merging, automatic branch deletion, secret scanning with push protection,
+  Dependabot alerts/security updates, and private vulnerability reporting.
 - Dual Apache-2.0/MIT license texts, a private vulnerability-reporting policy,
   CODEOWNERS, and immutable full-commit pins for every third-party GitHub
-  Action used by verification and release workflows. Release jobs use the
-  current standard `macos-15-intel` and `macos-15` runner labels instead of the
-  retired macOS 13 label.
+  Action used by verification and release workflows. Runtime actions use
+  Node.js 24-compatible majors, release jobs use the current standard
+  `macos-15-intel` and `macos-15` labels, and Dependabot tracks Cargo,
+  Terraform and GitHub Actions updates.
+- The `cli-release` GitHub environment requires explicit owner review and a
+  protected branch; tagged binary publication is bound to that environment.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC
   9421-style signed envelopes, live capability discovery, guarded reads,
   exact-payload configuration plans, approved-plan verification, and apply.
@@ -88,9 +95,8 @@ binary, application activation, and Telnyx workflow remain** · Updated
 
 ## Open gates
 
-- Create the hosted repository, enable private vulnerability reporting, protect
-  `main` and release tags using the checked-in CODEOWNERS rules, and require
-  release-environment approvals before making the repository public.
+- Protect `main` and release tags using the checked-in CODEOWNERS rules and the
+  passing hosted verification contexts.
 - Publish the signed CLI and authenticated trust-root/install instructions.
 - Verify channel-to-release linkage, freshness/rollback state, catalog
   revocation, CLI-version compatibility, and provider/region image selection as
@@ -123,12 +129,12 @@ or carrier readiness.
 
 ## Publication posture
 
-This repository is the intended public surface: it contains the independent
+This public repository is the intended external surface: it contains the independent
 operator client, schemas, embedded infrastructure adapters, agent skills, and
 runbooks, but no private Thelve application source or container layers. A clean
 history secret scan currently reports no findings. License, security-policy,
-CODEOWNERS, and immutable Action-pin files are checked in. Public visibility is
-still a controlled release decision, not a runner workaround: hosted branch and
-tag protection, private vulnerability reporting, release approvals, and signed
-binary publication must be configured first. The separate image factory should
-remain private and use protected cloud-native builds.
+CODEOWNERS, immutable Action pins, private vulnerability reporting, push
+protection and release approval are configured. Public source visibility does
+not make this a public quickstart: signed binary publication and the remaining
+activation evidence still gate that claim. The separate image factory remains
+private and uses protected cloud-native builds.
