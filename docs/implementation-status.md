@@ -67,6 +67,10 @@ Telnyx workflow remain** · Updated 2026-08-24
   no-secret job. Repository defaults are read-only Actions tokens, squash-only
   merging, automatic branch deletion, secret scanning with push protection,
   Dependabot alerts/security updates, and private vulnerability reporting.
+- `main` requires the four strict hosted checks plus one code-owner review,
+  resolved conversations, and linear history. Active `v*` tag rules restrict
+  creation, update, and deletion to the owner recovery path; force-push and
+  branch deletion are disabled while the owner retains administrative bypass.
 - Dual Apache-2.0/MIT license texts, a private vulnerability-reporting policy,
   CODEOWNERS, and immutable full-commit pins for every third-party GitHub
   Action used by verification and release workflows. Runtime actions use
@@ -95,8 +99,6 @@ Telnyx workflow remain** · Updated 2026-08-24
 
 ## Open gates
 
-- Protect `main` and release tags using the checked-in CODEOWNERS rules and the
-  passing hosted verification contexts.
 - Publish the signed CLI and authenticated trust-root/install instructions.
 - Verify channel-to-release linkage, freshness/rollback state, catalog
   revocation, CLI-version compatibility, and provider/region image selection as
