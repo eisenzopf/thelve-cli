@@ -418,7 +418,7 @@ sudo grep -Fqx 'Environment=DOCKER_CONFIG=/etc/thelve/docker' /etc/systemd/syste
 sudo install -d -o root -g root -m 0700 /etc/thelve/docker
 sudo grep -Fqx 'Environment=PATH=/usr/local/bin:/usr/bin:/bin' /etc/systemd/system/thelve.service
 sudo env HOME=/root DOCKER_CONFIG=/etc/thelve/docker PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/docker-credential-gcr configure-docker --registries="$registry_host" >/dev/null
-sudo jq -e --arg host "$registry_host" 'keys == ["credHelpers"] and (.credHelpers | length == 1) and .credHelpers[$host] == "gcr"' /etc/thelve/docker/config.json >/dev/null
+sudo jq -e --arg host "$registry_host" '((keys - ["auths", "credHelpers"]) | length == 0) and ((.auths // {{}}) | type == "object" and length == 0) and (.credHelpers | type == "object" and length == 1) and .credHelpers[$host] == "gcr"' /etc/thelve/docker/config.json >/dev/null
 test "$(sudo stat -c '%U:%G:%a' /etc/thelve/docker/config.json)" = root:root:600
 activation_stage=materialize-secrets
 sudo_node /opt/thelve/bin/thelve-node activate-secrets --config /etc/thelve/node.yaml > "$stage/secrets.json"
@@ -669,6 +669,9 @@ mod tests {
         assert!(command.contains("--operation-id 123e4567-e89b-12d3-a456-426614174000"));
         assert!(command.contains("DOCKER_CONFIG=/etc/thelve/docker"));
         assert!(command.contains("docker-credential-gcr configure-docker"));
+        assert!(command.contains("keys - [\"auths\", \"credHelpers\"]"));
+        assert!(command.contains("(.auths // {})"));
+        assert!(command.contains("length == 0"));
         assert!(command.contains("accessTokenPersisted:false"));
         assert!(command.contains("ulimit -n 65536"));
         assert!(command.contains("sudo_node()"));
