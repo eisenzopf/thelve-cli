@@ -254,6 +254,7 @@ pub fn verify_fetched(root: &Path) -> Result<(FetchReceipt, PreviewRelease)> {
         &root.join("trust-root.json"),
         &receipt.trust_root_sha256,
     )?;
+    validate_receipt_against_descriptor(&receipt, &descriptor)?;
     for (name, file) in [
         ("deploymentBundle", "thelve-deployment-bundle.tar.gz"),
         ("nodeManager", "thelve-node"),
@@ -269,6 +270,36 @@ pub fn verify_fetched(root: &Path) -> Result<(FetchReceipt, PreviewRelease)> {
         }
     }
     Ok((receipt, descriptor))
+}
+
+fn validate_receipt_against_descriptor(
+    receipt: &FetchReceipt,
+    descriptor: &PreviewRelease,
+) -> Result<()> {
+    if receipt.release != descriptor.metadata.release
+        || receipt.release_id != descriptor.metadata.release_id
+        || receipt.project_id != descriptor.spec.project_id
+        || receipt.region != descriptor.spec.region
+        || receipt.deployment_release_sha256 != descriptor.spec.deployment_release_sha256
+        || receipt.trust_root_sha256 != descriptor.spec.catalog_trust_root.sha256
+        || receipt.artifacts.len() != 3
+    {
+        bail!("preview fetch receipt does not match the signed descriptor");
+    }
+    for (name, object) in [
+        ("deploymentBundle", &descriptor.spec.deployment_bundle),
+        ("nodeManager", &descriptor.spec.node_manager),
+        ("offlineTrustStore", &descriptor.spec.offline_trust_store),
+    ] {
+        let artifact = receipt
+            .artifacts
+            .get(name)
+            .with_context(|| format!("fetch receipt is missing {name}"))?;
+        if artifact.sha256 != object.sha256 || artifact.size_bytes != object.size_bytes {
+            bail!("preview fetch receipt artifact {name} does not match the signed descriptor");
+        }
+    }
+    Ok(())
 }
 
 fn validate_preview(
@@ -467,6 +498,84 @@ pub fn required_file(root: &Path, name: &str) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    fn preview_pair() -> (FetchReceipt, PreviewRelease) {
+        let object = |name: &str, byte: char| RemoteObject {
+            gcs_uri: format!("gs://preview/releases/0.1.0-preview.2/id/{name}"),
+            https_uri: format!(
+                "https://storage.googleapis.com/preview/releases/0.1.0-preview.2/id/{name}"
+            ),
+            sha256: format!("sha256:{}", byte.to_string().repeat(64)),
+            size_bytes: 10,
+        };
+        let descriptor = PreviewRelease {
+            schema_version: "thelve.gcp-preview-release/v1".into(),
+            metadata: PreviewMetadata {
+                release: "0.1.0-preview.2".into(),
+                release_id: "123e4567-e89b-12d3-a456-426614174000".into(),
+                created_at: "2026-08-24T00:00:00Z".into(),
+                source_commit: "a".repeat(40),
+                source_tree_sha256: format!("sha256:{}", "a".repeat(64)),
+                cloud_build_id: "123e4567-e89b-12d3-a456-426614174001".into(),
+                preview_only: true,
+            },
+            spec: PreviewSpec {
+                project_id: "thelve-preview-123456".into(),
+                region: "us-west1".into(),
+                registry_prefix: "us-west1-docker.pkg.dev/thelve-preview-123456/thelve".into(),
+                deployment_release_sha256: format!("sha256:{}", "d".repeat(64)),
+                deployment_bundle: object("bundle", '1'),
+                node_manager: object("node", '2'),
+                offline_trust_store: object("trust", '3'),
+                catalog_trust_root: object("catalog-trust", '4'),
+                images: Vec::new(),
+                qualification: PreviewQualification {
+                    production_qualified: false,
+                    requires_explicit_preview_admission: true,
+                    open_gates: vec!["preview".into()],
+                },
+            },
+        };
+        let artifacts = BTreeMap::from([
+            (
+                "deploymentBundle".into(),
+                ArtifactReceipt {
+                    sha256: descriptor.spec.deployment_bundle.sha256.clone(),
+                    size_bytes: descriptor.spec.deployment_bundle.size_bytes,
+                },
+            ),
+            (
+                "nodeManager".into(),
+                ArtifactReceipt {
+                    sha256: descriptor.spec.node_manager.sha256.clone(),
+                    size_bytes: descriptor.spec.node_manager.size_bytes,
+                },
+            ),
+            (
+                "offlineTrustStore".into(),
+                ArtifactReceipt {
+                    sha256: descriptor.spec.offline_trust_store.sha256.clone(),
+                    size_bytes: descriptor.spec.offline_trust_store.size_bytes,
+                },
+            ),
+        ]);
+        let receipt = FetchReceipt {
+            schema_version: FETCH_RECEIPT_SCHEMA.into(),
+            release: descriptor.metadata.release.clone(),
+            release_id: descriptor.metadata.release_id.clone(),
+            project_id: descriptor.spec.project_id.clone(),
+            region: descriptor.spec.region.clone(),
+            descriptor_sha256: format!("sha256:{}", "e".repeat(64)),
+            trust_root_sha256: descriptor.spec.catalog_trust_root.sha256.clone(),
+            deployment_release_sha256: descriptor.spec.deployment_release_sha256.clone(),
+            artifacts,
+            preview_only: true,
+            production_qualified: false,
+            fetched_at: chrono::Utc::now(),
+            secret_values_recorded: false,
+        };
+        (receipt, descriptor)
+    }
+
     #[test]
     fn gcs_parent_rejects_traversal_and_accepts_one_immutable_prefix() {
         assert_eq!(
@@ -475,5 +584,14 @@ mod tests {
         );
         assert!(gcs_parent("gs://thelve-release/releases/../secret").is_err());
         assert!(gcs_parent("https://storage.googleapis.com/bucket/object").is_err());
+    }
+
+    #[test]
+    fn fetched_receipt_is_bound_to_signed_artifact_inventory() {
+        let (mut receipt, descriptor) = preview_pair();
+        validate_receipt_against_descriptor(&receipt, &descriptor).unwrap();
+        receipt.artifacts.get_mut("nodeManager").unwrap().sha256 =
+            format!("sha256:{}", "f".repeat(64));
+        assert!(validate_receipt_against_descriptor(&receipt, &descriptor).is_err());
     }
 }

@@ -4,6 +4,10 @@ Status: local CLI implementation available, including private GCP preview
 retrieval and IAP activation; first qualified host-image, activation, and live
 Telnyx receipts remain open. `deploy up` starts the host, while
 `deploy activate-gcp` is the separate application-readiness boundary.
+Activation grants the deployment's exact runtime service account read access
+to the exact signed Artifact Registry repository. The host obtains short-lived
+credentials from its GCE identity through `docker-credential-gcr`; neither the
+CLI nor the host stores an OAuth access token or registry password.
 
 ## Safety model
 
@@ -85,6 +89,14 @@ automation, pass `--stdin` and pipe from an authorized process; never put either
 value in a command argument or deployment file. Internal-secret initialization
 refuses a mixed version-1 state so correlated database credentials cannot drift
 after a partial attempt.
+
+`activate-gcp` also confirms that the immutable host image contains the
+checksum-pinned standalone GCP registry helper and that the installed systemd
+unit uses the root-only `/etc/thelve/docker` configuration. Its redacted receipt
+records the repository, runtime service account, IAM role, helper, and the fact
+that no access token was persisted. Repository IAM is idempotent and remains in
+place if a later application-readiness check fails; remove that exact binding
+only as an explicit deprovisioning action.
 
 ## AWS sequence
 

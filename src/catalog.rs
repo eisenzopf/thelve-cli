@@ -7,6 +7,10 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+const MAX_CATALOG_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_SIGNATURE_BYTES: u64 = 1024 * 1024;
+const MAX_TRUST_ROOT_BYTES: u64 = 1024 * 1024;
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum CatalogKind {
     Release,
@@ -62,10 +66,9 @@ pub fn verify(
     expected_trust_root_sha256: &str,
     kind: CatalogKind,
 ) -> Result<VerificationReceipt> {
-    let document = fs::read(document_path)
-        .with_context(|| format!("read catalog {}", document_path.display()))?;
-    let envelope_bytes = fs::read(signature_path)
-        .with_context(|| format!("read signature {}", signature_path.display()))?;
+    let document = read_regular_bounded(document_path, MAX_CATALOG_BYTES, "catalog")?;
+    let envelope_bytes =
+        read_regular_bounded(signature_path, MAX_SIGNATURE_BYTES, "signature envelope")?;
     let envelope_value: serde_json::Value =
         serde_json::from_slice(&envelope_bytes).context("parse detached signature envelope")?;
     validate_against(
@@ -75,8 +78,7 @@ pub fn verify(
     )?;
     let envelope: SignatureEnvelope = serde_json::from_value(envelope_value)?;
 
-    let trust_bytes = fs::read(trust_root_path)
-        .with_context(|| format!("read trust root {}", trust_root_path.display()))?;
+    let trust_bytes = read_regular_bounded(trust_root_path, MAX_TRUST_ROOT_BYTES, "trust root")?;
     let trust_root_digest = format!("sha256:{:x}", Sha256::digest(&trust_bytes));
     if expected_trust_root_sha256 != trust_root_digest {
         bail!(
@@ -151,6 +153,19 @@ pub fn verify(
         digest,
         trust_root_digest,
     })
+}
+
+fn read_regular_bounded(path: &Path, maximum: u64, label: &str) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("inspect {label} {}", path.display()))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() == 0
+        || metadata.len() > maximum
+    {
+        bail!("{label} must be a bounded non-empty regular file");
+    }
+    fs::read(path).with_context(|| format!("read {label} {}", path.display()))
 }
 
 fn validate_schema(document: &serde_json::Value, kind: CatalogKind) -> Result<()> {

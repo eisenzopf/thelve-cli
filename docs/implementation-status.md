@@ -2,7 +2,7 @@
 
 Overall status: **Partial — local core and GCP preview activation path
 implemented and validated; public binary, live cloud receipts, and Telnyx
-workflow pending** · Updated 2026-08-23
+workflow pending** · Updated 2026-08-24
 
 ## Implemented
 
@@ -32,11 +32,14 @@ workflow pending** · Updated 2026-08-23
 - Private GCP preview descriptor verification and retrieval enforces explicit
   preview admission, one immutable GCS prefix, signed size/digest checks for
   the deployment bundle, node manager, and offline trust store, and an atomic
-  local fetch receipt.
+  local fetch receipt. Every later use re-verifies the detached signature and
+  binds all receipt identity and artifact fields back to the signed descriptor.
 - Value-free node configuration rendering from applied Terraform outputs and
   GCP IAP/OS Login activation with local/remote SHA-256 checks, signed bundle
   verification, activation preflight, idempotent install operation ID, secret
-  materialization, systemd start, readiness assertion, and redacted receipt.
+  materialization, exact-repository Artifact Registry reader IAM, standalone
+  GCE credential-helper configuration with no persisted access token, systemd
+  start, readiness assertion, and redacted receipt.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC

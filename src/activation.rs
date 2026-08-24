@@ -21,6 +21,14 @@ use crate::{
 };
 
 const MAX_NODE_CONFIG_BYTES: u64 = 1024 * 1024;
+const ARTIFACT_REGISTRY_READER_ROLE: &str = "roles/artifactregistry.reader";
+
+#[derive(Debug, Eq, PartialEq)]
+struct GcpRegistryTarget {
+    host: String,
+    repository: String,
+    prefix: String,
+}
 
 pub fn render_node_config(
     config_path: &Path,
@@ -117,13 +125,17 @@ pub fn activate_gcp(
     }
     let intent = config::load(config_path)?;
     let Provider::Gcp {
-        project_id, zone, ..
+        project_id,
+        region,
+        zone,
+        ..
     } = &intent.spec.provider
     else {
         bail!("deploy activate-gcp requires a GCP deployment intent");
     };
-    let (release_receipt, _) = preview::verify_fetched(release_root)?;
+    let (release_receipt, release) = preview::verify_fetched(release_root)?;
     ensure_release_provider(&intent, &release_receipt)?;
+    let registry = parse_gcp_registry_prefix(&release.spec.registry_prefix, project_id, region)?;
     let outputs = terraform::outputs(config_path, &intent)?;
     let instance = output_value(&outputs, "instance_name")?
         .as_str()
@@ -134,6 +146,12 @@ pub fn activate_gcp(
     let public_ip = output_value(&outputs, "public_ip")?
         .as_str()
         .context("Terraform public_ip output is not a string")?;
+    let runtime_service_account = output_value(&outputs, "runtime_service_account")?
+        .as_str()
+        .context("Terraform runtime_service_account output is not a string")?;
+    if !valid_gcp_service_account(runtime_service_account, project_id) {
+        bail!("Terraform runtime_service_account output is not the deployment service account");
+    }
     if instance_status != "RUNNING" {
         bail!("GCP instance is not running; run `thelve deploy up` first");
     }
@@ -213,6 +231,13 @@ pub fn activate_gcp(
         scp = scp.arg(target);
         process::inherit(&scp)?;
 
+        grant_registry_reader(
+            project_id,
+            region,
+            &registry.repository,
+            runtime_service_account,
+        )?;
+
         let node_sha = digest_hex(
             &release_receipt
                 .artifacts
@@ -242,17 +267,40 @@ pub fn activate_gcp(
             bundle_sha,
             trust_sha,
             &config_sha,
+            &registry.host,
         );
         let output = process::capture(&ssh_base(remote_command))?;
-        let receipt: Value =
+        let mut receipt: Value =
             serde_json::from_str(&output).context("remote activation receipt is not JSON")?;
         if receipt.get("schemaVersion").and_then(Value::as_str)
             != Some("thelve.gcp-activation-receipt/v1")
             || receipt.get("secretValuesRecorded").and_then(Value::as_bool) != Some(false)
             || receipt.pointer("/readiness/ready").and_then(Value::as_bool) != Some(true)
+            || receipt
+                .pointer("/registryAccess/host")
+                .and_then(Value::as_str)
+                != Some(registry.host.as_str())
+            || receipt
+                .pointer("/registryAccess/credentialHelper")
+                .and_then(Value::as_str)
+                != Some("docker-credential-gcr")
+            || receipt
+                .pointer("/registryAccess/accessTokenPersisted")
+                .and_then(Value::as_bool)
+                != Some(false)
         {
             bail!("remote activation did not return a ready, redacted receipt");
         }
+        let registry_access = receipt
+            .pointer_mut("/registryAccess")
+            .and_then(Value::as_object_mut)
+            .context("remote activation receipt is missing registry access evidence")?;
+        registry_access.insert("repository".into(), registry.prefix.clone().into());
+        registry_access.insert(
+            "runtimeServiceAccount".into(),
+            runtime_service_account.into(),
+        );
+        registry_access.insert("iamRole".into(), ARTIFACT_REGISTRY_READER_ROLE.into());
         let mut bytes = serde_json::to_vec_pretty(&receipt)?;
         bytes.push(b'\n');
         create_private(receipt_path, &bytes)?;
@@ -275,30 +323,125 @@ fn remote_activation_command(
     bundle_sha: &str,
     trust_sha: &str,
     config_sha: &str,
+    registry_host: &str,
 ) -> String {
     format!(
         r#"set -euo pipefail
+umask 077
+ulimit -n 65536
 stage={stage}
+registry_host={registry_host}
 cleanup() {{ rm -rf -- "$stage"; }}
 trap cleanup EXIT
-printf '%s  %s\n' {node_sha} "$stage/thelve-node" | sha256sum --check --strict -
-printf '%s  %s\n' {bundle_sha} "$stage/bundle.tar.gz" | sha256sum --check --strict -
-printf '%s  %s\n' {trust_sha} "$stage/offline-trust.json" | sha256sum --check --strict -
-printf '%s  %s\n' {config_sha} "$stage/node.yaml" | sha256sum --check --strict -
+printf '%s  %s\n' {node_sha} "$stage/thelve-node" | sha256sum --check --strict - >/dev/null
+printf '%s  %s\n' {bundle_sha} "$stage/bundle.tar.gz" | sha256sum --check --strict - >/dev/null
+printf '%s  %s\n' {trust_sha} "$stage/offline-trust.json" | sha256sum --check --strict - >/dev/null
+printf '%s  %s\n' {config_sha} "$stage/node.yaml" | sha256sum --check --strict - >/dev/null
 chmod 0700 "$stage/thelve-node"
 tar -tzf "$stage/bundle.tar.gz" > "$stage/bundle.list"
+tar -tvzf "$stage/bundle.tar.gz" > "$stage/bundle.verbose"
 test -s "$stage/bundle.list"
+test "$(wc -l < "$stage/bundle.list" | tr -d ' ')" -le 4096
+test -z "$(LC_ALL=C sort "$stage/bundle.list" | uniq -d)"
 awk 'index($0, "/../") || $0 ~ /^\.\.\// || $0 ~ /^\// || $0 !~ /^bundle\// {{ exit 1 }}' "$stage/bundle.list"
+awk 'substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d" {{ exit 1 }}' "$stage/bundle.verbose"
 mkdir "$stage/release"
 tar --no-same-owner --no-same-permissions -xzf "$stage/bundle.tar.gz" -C "$stage/release"
 sudo "$stage/thelve-node" verify --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/verify.json"
 sudo "$stage/thelve-node" preflight --activation --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/preflight.json"
 sudo "$stage/thelve-node" install --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" --operation-id {operation_id} > "$stage/install.json"
+test -x /usr/local/bin/docker-credential-gcr
+sudo grep -Fqx 'Environment=DOCKER_CONFIG=/etc/thelve/docker' /etc/systemd/system/thelve.service
+sudo install -d -o root -g root -m 0700 /etc/thelve/docker
+sudo grep -Fqx 'Environment=PATH=/usr/local/bin:/usr/bin:/bin' /etc/systemd/system/thelve.service
+sudo env HOME=/root DOCKER_CONFIG=/etc/thelve/docker PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/docker-credential-gcr configure-docker --registries="$registry_host" >/dev/null
+sudo jq -e --arg host "$registry_host" 'keys == ["credHelpers"] and (.credHelpers | length == 1) and .credHelpers[$host] == "gcr"' /etc/thelve/docker/config.json >/dev/null
+test "$(sudo stat -c '%U:%G:%a' /etc/thelve/docker/config.json)" = root:root:600
 sudo /opt/thelve/bin/thelve-node activate-secrets --config /etc/thelve/node.yaml > "$stage/secrets.json"
 sudo /opt/thelve/bin/thelve-node start > "$stage/start.json"
 sudo /opt/thelve/bin/thelve-node readiness > "$stage/readiness.json"
-jq -n --arg operationId {operation_id} --slurpfile verify "$stage/verify.json" --slurpfile preflight "$stage/preflight.json" --slurpfile install "$stage/install.json" --slurpfile secrets "$stage/secrets.json" --slurpfile start "$stage/start.json" --slurpfile readiness "$stage/readiness.json" '{{schemaVersion:"thelve.gcp-activation-receipt/v1",operationId:$operationId,verification:$verify[0],preflight:$preflight[0],install:$install[0],secretActivation:$secrets[0],serviceAction:$start[0],readiness:$readiness[0],secretValuesRecorded:false}}'"#
+jq -n --arg operationId {operation_id} --arg registryHost "$registry_host" --slurpfile verify "$stage/verify.json" --slurpfile preflight "$stage/preflight.json" --slurpfile install "$stage/install.json" --slurpfile secrets "$stage/secrets.json" --slurpfile start "$stage/start.json" --slurpfile readiness "$stage/readiness.json" '{{schemaVersion:"thelve.gcp-activation-receipt/v1",operationId:$operationId,verification:$verify[0],preflight:$preflight[0],install:$install[0],secretActivation:$secrets[0],registryAccess:{{host:$registryHost,credentialHelper:"docker-credential-gcr",dockerConfig:"/etc/thelve/docker/config.json",accessTokenPersisted:false}},serviceAction:$start[0],readiness:$readiness[0],secretValuesRecorded:false}}'"#
     )
+}
+
+fn grant_registry_reader(
+    project_id: &str,
+    region: &str,
+    repository: &str,
+    runtime_service_account: &str,
+) -> Result<()> {
+    process::inherit(&CommandPlan::new("gcloud").args([
+        "artifacts".into(),
+        "repositories".into(),
+        "add-iam-policy-binding".into(),
+        repository.into(),
+        "--project".into(),
+        project_id.into(),
+        "--location".into(),
+        region.into(),
+        "--member".into(),
+        format!("serviceAccount:{runtime_service_account}"),
+        "--role".into(),
+        ARTIFACT_REGISTRY_READER_ROLE.into(),
+        "--condition=None".into(),
+        "--quiet".into(),
+    ]))
+    .context("grant exact Artifact Registry repository read access to the runtime identity")
+}
+
+fn parse_gcp_registry_prefix(
+    prefix: &str,
+    project_id: &str,
+    region: &str,
+) -> Result<GcpRegistryTarget> {
+    let parts = prefix.split('/').collect::<Vec<_>>();
+    let expected_host = format!("{region}-docker.pkg.dev");
+    if parts.len() != 3
+        || parts[0] != expected_host
+        || parts[1] != project_id
+        || !valid_registry_repository(parts[2])
+    {
+        bail!("signed preview registry is not the exact deployment repository");
+    }
+    Ok(GcpRegistryTarget {
+        host: parts[0].into(),
+        repository: parts[2].into(),
+        prefix: prefix.into(),
+    })
+}
+
+fn valid_registry_repository(value: &str) -> bool {
+    value.len() <= 63
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn valid_gcp_service_account(value: &str, project_id: &str) -> bool {
+    let Some(account_id) = value.strip_suffix(&format!("@{project_id}.iam.gserviceaccount.com"))
+    else {
+        return false;
+    };
+    (6..=30).contains(&account_id.len())
+        && account_id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && account_id
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_lowercase)
+        && account_id
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
 }
 
 fn ensure_release_provider(
@@ -454,10 +597,16 @@ mod tests {
             &"b".repeat(64),
             &"c".repeat(64),
             &"d".repeat(64),
+            "us-west1-docker.pkg.dev",
         );
         assert!(command.contains("--operation-id 123e4567-e89b-12d3-a456-426614174000"));
+        assert!(command.contains("DOCKER_CONFIG=/etc/thelve/docker"));
+        assert!(command.contains("docker-credential-gcr configure-docker"));
+        assert!(command.contains("accessTokenPersisted:false"));
+        assert!(command.contains("ulimit -n 65536"));
         assert!(command.contains("secretValuesRecorded:false"));
         assert!(!command.contains("api-key"));
+        assert!(!command.contains("oauth2accesstoken"));
     }
 
     #[test]
@@ -465,5 +614,45 @@ mod tests {
         assert!(valid_fqdn("app.example.com"));
         assert!(!valid_fqdn("localhost"));
         assert!(!valid_email("not-an-email"));
+    }
+
+    #[test]
+    fn signed_registry_prefix_is_exact_and_argument_safe() {
+        let target = parse_gcp_registry_prefix(
+            "us-west1-docker.pkg.dev/thelve-preview-123456/thelve-preview",
+            "thelve-preview-123456",
+            "us-west1",
+        )
+        .unwrap();
+        assert_eq!(target.host, "us-west1-docker.pkg.dev");
+        assert_eq!(target.repository, "thelve-preview");
+        assert!(
+            parse_gcp_registry_prefix(
+                "us-west1-docker.pkg.dev/other-project/thelve-preview",
+                "thelve-preview-123456",
+                "us-west1",
+            )
+            .is_err()
+        );
+        assert!(
+            parse_gcp_registry_prefix(
+                "us-west1-docker.pkg.dev/thelve-preview-123456/repo;id",
+                "thelve-preview-123456",
+                "us-west1",
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn runtime_identity_must_belong_to_exact_project() {
+        assert!(valid_gcp_service_account(
+            "thelve-test-node@thelve-preview-123456.iam.gserviceaccount.com",
+            "thelve-preview-123456"
+        ));
+        assert!(!valid_gcp_service_account(
+            "thelve-test-node@other-project.iam.gserviceaccount.com",
+            "thelve-preview-123456"
+        ));
     }
 }

@@ -17,7 +17,8 @@ remote inputs verified by digest and signature.
 - signed release, channel, machine-image, and private GCP preview documents:
   `thelve release verify`
 - authenticated private preview retrieval with signed per-object size/digest
-  enforcement: `thelve release fetch-gcp-preview`
+  enforcement and tamper-resistant receipt revalidation:
+  `thelve release fetch-gcp-preview`
 - strict non-secret deployment intent: `thelve deploy init`
 - remote-state creation: `thelve deploy bootstrap-state`
 - redacted Terraform plans and explicit prepare/apply/pause/resume/destroy
@@ -25,7 +26,8 @@ remote inputs verified by digest and signature.
 - one-shot correlated generation of non-Telnyx GCP runtime secrets without
   local persistence: `thelve secret initialize-internal`
 - value-free node configuration rendering and signed-release activation over
-  GCP IAP/OS Login with remote digest checks and a redacted readiness receipt
+  GCP IAP/OS Login with remote digest checks, exact-repository Artifact Registry
+  IAM, metadata-backed registry credentials, and a redacted readiness receipt
 - detached Ed25519 catalog verification with an independently pinned
   trust-root digest and embedded root/envelope/document schemas
 - protected Ed25519 AAuth profiles for signed access to a deployed Thelve API
