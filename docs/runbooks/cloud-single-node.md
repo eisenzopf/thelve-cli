@@ -1,8 +1,9 @@
 # Cloud single-node operator runbook
 
-Status: local CLI implementation available, including private GCP preview
-retrieval and IAP activation; first qualified host-image, activation, and live
-Telnyx receipts remain open. `deploy up` starts the host, while
+Status: local CLI implementation available, including live-validated private
+GCP preview retrieval and prepare-only reconciliation onto an independently
+qualified image; application activation and live Telnyx receipts remain open.
+`deploy up` starts the host, while
 `deploy activate-gcp` is the separate application-readiness boundary.
 Activation grants the deployment's exact runtime service account read access
 to the exact signed Artifact Registry repository. The host obtains short-lived
@@ -96,6 +97,12 @@ automation, pass `--stdin` and pipe from an authorized process; never put either
 value in a command argument or deployment file. Internal-secret initialization
 refuses a mixed version-1 state so correlated database credentials cannot drift
 after a partial attempt.
+
+The TLS contact email is operational metadata, not a secret, but it must be a
+real operator-selected address for ACME notices. Do not substitute an example
+address in an actual activation. Stop after `prepare` if the contact or either
+Telnyx value is not yet available; the static address, state, backup bucket and
+secret containers remain provisioned while compute stays stopped.
 
 `activate-gcp` also confirms that the immutable host image contains the
 checksum-pinned standalone GCP registry helper and that the installed systemd

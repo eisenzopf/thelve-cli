@@ -62,3 +62,9 @@ sequence and safety boundaries. Current delivery gates are recorded in
 See [agent-access.md](docs/runbooks/agent-access.md) to enroll a public key,
 bind a bounded human-approved delegation, install the agent surfaces, and run
 the exact-plan workflow.
+
+## License and security
+
+The CLI is dual-licensed under Apache-2.0 or MIT. See [LICENSE-APACHE](LICENSE-APACHE)
+and [LICENSE-MIT](LICENSE-MIT). Report suspected vulnerabilities through the
+private process in [SECURITY.md](SECURITY.md), never through a public issue.

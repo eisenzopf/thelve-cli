@@ -1,8 +1,9 @@
 # Thelve CLI implementation status
 
-Overall status: **Partial — local core and GCP preview activation path
-implemented and validated; public binary, live cloud receipts, and Telnyx
-workflow pending** · Updated 2026-08-24
+Overall status: **Partial — local core, signed GCP preview retrieval, and
+qualified-image infrastructure reconciliation are live-validated; public
+binary, application activation, and Telnyx workflow remain** · Updated
+2026-08-24
 
 ## Implemented
 
@@ -48,8 +49,21 @@ workflow pending** · Updated 2026-08-24
   materialization, exact-repository Artifact Registry reader IAM, standalone
   GCE credential-helper configuration with no persisted access token, systemd
   start, readiness assertion, and redacted receipt.
+- Live GCP preview evidence: signed release `0.1.0-preview.2` was fetched and
+  reverified against an independently pinned trust-root digest; the prepared
+  deployment was then reconciled onto qualified image
+  `thelve-host-0-1-0-preview-4-20260824-2a383b6`, preserving the static IP and
+  external state while leaving the host stopped.
+- Activation and remote qualification preserve the required open-file limit
+  across privilege elevation by setting it inside the audited root shell; this
+  was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
+- Dual Apache-2.0/MIT license texts, a private vulnerability-reporting policy,
+  CODEOWNERS, and immutable full-commit pins for every third-party GitHub
+  Action used by verification and release workflows. Release jobs use the
+  current standard `macos-15-intel` and `macos-15` runner labels instead of the
+  retired macOS 13 label.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC
   9421-style signed envelopes, live capability discovery, guarded reads,
   exact-payload configuration plans, approved-plan verification, and apply.
@@ -70,15 +84,16 @@ workflow pending** · Updated 2026-08-24
 
 ## Open gates
 
-- Create the hosted repository, set visibility, CODEOWNERS, protected `main`,
-  and required release-environment approvals.
+- Create the hosted repository, enable private vulnerability reporting, protect
+  `main` and release tags using the checked-in CODEOWNERS rules, and require
+  release-environment approvals before making the repository public.
 - Publish the signed CLI and authenticated trust-root/install instructions.
 - Verify channel-to-release linkage, freshness/rollback state, catalog
   revocation, CLI-version compatibility, and provider/region image selection as
   a single transaction.
-- Run the implemented GCP retrieval/activation path against a qualified host
-  image and retain its first real receipt; implement equivalent AWS SSM
-  transport and activation.
+- Run the implemented GCP application-activation path against the already
+  qualified/prepared host and retain its first real receipt; implement
+  equivalent AWS SSM transport and activation.
 - Add release list/select, logs, readiness, backup/restore, upgrade/rollback,
   support bundle, capacity change, and governed inbound-test commands.
 - Run clean-workstation GCP and AWS apply/security/recovery/cleanup receipts.
@@ -101,3 +116,15 @@ terraform -chdir=modules/aws-single-node validate
 The CLI is not a public quickstart until the signed-distribution and remote
 activation gates pass. Infrastructure reconciliation alone is not application
 or carrier readiness.
+
+## Publication posture
+
+This repository is the intended public surface: it contains the independent
+operator client, schemas, embedded infrastructure adapters, agent skills, and
+runbooks, but no private Thelve application source or container layers. A clean
+history secret scan currently reports no findings. License, security-policy,
+CODEOWNERS, and immutable Action-pin files are checked in. Public visibility is
+still a controlled release decision, not a runner workaround: hosted branch and
+tag protection, private vulnerability reporting, release approvals, and signed
+binary publication must be configured first. The separate image factory should
+remain private and use protected cloud-native builds.
