@@ -2,6 +2,8 @@ use std::{
     fs::{self, OpenOptions},
     io::Write as _,
     path::Path,
+    thread,
+    time::Duration,
 };
 
 #[cfg(unix)]
@@ -22,6 +24,8 @@ use crate::{
 
 const MAX_NODE_CONFIG_BYTES: u64 = 1024 * 1024;
 const ARTIFACT_REGISTRY_READER_ROLE: &str = "roles/artifactregistry.reader";
+const GCP_SSH_READY_ATTEMPTS: u8 = 24;
+const GCP_SSH_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Eq, PartialEq)]
 struct GcpRegistryTarget {
@@ -168,6 +172,8 @@ pub fn activate_gcp(
         public_ip,
     )?;
 
+    wait_for_gcp_ssh(instance, project_id, zone)?;
+
     let local_stage = tempdir().context("create local activation staging directory")?;
     let files = [
         (
@@ -195,21 +201,7 @@ pub fn activate_gcp(
     let stage_name = format!("thelve-activation-{operation_id}");
     let remote_stage = format!("/tmp/{stage_name}");
     let target = format!("{instance}:{remote_stage}/");
-    let ssh_base = |command: String| {
-        CommandPlan::new("gcloud").args([
-            "compute".into(),
-            "ssh".into(),
-            instance.into(),
-            "--project".into(),
-            project_id.clone(),
-            "--zone".into(),
-            zone.clone(),
-            "--tunnel-through-iap".into(),
-            "--quiet".into(),
-            "--command".into(),
-            command,
-        ])
-    };
+    let ssh_base = |command: String| gcp_ssh_plan(instance, project_id, zone, command);
     process::inherit(&ssh_base(format!(
         "set -eu; umask 077; test ! -e {remote_stage}; mkdir {remote_stage}"
     )))?;
@@ -314,6 +306,67 @@ pub fn activate_gcp(
         "set -eu; case {remote_stage} in /tmp/thelve-activation-*) rm -rf -- {remote_stage} ;; *) exit 1 ;; esac"
     )));
     result
+}
+
+fn wait_for_gcp_ssh(instance: &str, project_id: &str, zone: &str) -> Result<()> {
+    let probe = gcp_ssh_plan(instance, project_id, zone, "true");
+    let attempts = retry_until_ready(
+        GCP_SSH_READY_ATTEMPTS,
+        GCP_SSH_READY_RETRY_DELAY,
+        || process::capture(&probe).map(|_| ()),
+        |attempt, delay| {
+            eprintln!(
+                "GCP node SSH is not ready yet (probe {attempt}/{GCP_SSH_READY_ATTEMPTS}); retrying in {} seconds",
+                delay.as_secs()
+            );
+            thread::sleep(delay);
+        },
+    )
+    .context("GCP node did not become reachable through IAP/SSH")?;
+    println!("GCP node SSH is ready after {attempts} probe(s)");
+    Ok(())
+}
+
+fn gcp_ssh_plan(
+    instance: &str,
+    project_id: &str,
+    zone: &str,
+    command: impl Into<String>,
+) -> CommandPlan {
+    CommandPlan::new("gcloud").args([
+        "compute".into(),
+        "ssh".into(),
+        instance.into(),
+        "--project".into(),
+        project_id.into(),
+        "--zone".into(),
+        zone.into(),
+        "--tunnel-through-iap".into(),
+        "--quiet".into(),
+        "--ssh-flag=-oBatchMode=yes".into(),
+        "--ssh-flag=-oConnectTimeout=5".into(),
+        "--ssh-flag=-oConnectionAttempts=1".into(),
+        "--command".into(),
+        command.into(),
+    ])
+}
+
+fn retry_until_ready<F, W>(attempts: u8, delay: Duration, mut probe: F, mut wait: W) -> Result<u8>
+where
+    F: FnMut() -> Result<()>,
+    W: FnMut(u8, Duration),
+{
+    if attempts == 0 {
+        bail!("readiness retry policy must include at least one attempt");
+    }
+    for attempt in 1..=attempts {
+        match probe() {
+            Ok(()) => return Ok(attempt),
+            Err(error) if attempt == attempts => return Err(error),
+            Err(_) => wait(attempt, delay),
+        }
+    }
+    unreachable!("a positive bounded retry loop always returns")
 }
 
 fn remote_activation_command(
@@ -657,5 +710,67 @@ mod tests {
             "thelve-test-node@other-project.iam.gserviceaccount.com",
             "thelve-preview-123456"
         ));
+    }
+
+    #[test]
+    fn gcp_ssh_plan_uses_iap_and_bounded_noninteractive_ssh() {
+        let plan = gcp_ssh_plan(
+            "thelve-preview-test",
+            "thelve-preview-123456",
+            "us-west1-b",
+            "true",
+        );
+        assert_eq!(plan.program, "gcloud");
+        assert!(
+            plan.args
+                .windows(2)
+                .any(|args| args == ["--project", "thelve-preview-123456"])
+        );
+        assert!(
+            plan.args
+                .windows(2)
+                .any(|args| args == ["--zone", "us-west1-b"])
+        );
+        assert!(plan.args.contains(&"--tunnel-through-iap".into()));
+        assert!(plan.args.contains(&"--ssh-flag=-oBatchMode=yes".into()));
+        assert!(plan.args.contains(&"--ssh-flag=-oConnectTimeout=5".into()));
+        assert!(
+            plan.args
+                .contains(&"--ssh-flag=-oConnectionAttempts=1".into())
+        );
+        assert_eq!(plan.args.last().map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn readiness_retry_stops_on_success_without_sleeping_afterward() {
+        let mut probes = 0;
+        let mut waits = Vec::new();
+        let succeeded_at = retry_until_ready(
+            4,
+            Duration::from_secs(5),
+            || {
+                probes += 1;
+                if probes < 3 {
+                    bail!("not ready")
+                }
+                Ok(())
+            },
+            |attempt, delay| waits.push((attempt, delay)),
+        )
+        .unwrap();
+        assert_eq!(succeeded_at, 3);
+        assert_eq!(probes, 3);
+        assert_eq!(
+            waits,
+            vec![(1, Duration::from_secs(5)), (2, Duration::from_secs(5))]
+        );
+    }
+
+    #[test]
+    fn readiness_retry_returns_the_final_probe_error() {
+        let error =
+            retry_until_ready(2, Duration::ZERO, || bail!("still booting"), |_, _| {}).unwrap_err();
+        assert_eq!(error.to_string(), "still booting");
+        assert!(retry_until_ready(0, Duration::ZERO, || Ok(()), |_, _| {}).is_err());
     }
 }
