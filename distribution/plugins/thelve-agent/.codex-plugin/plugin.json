@@ -1,0 +1,18 @@
+{
+  "name": "thelve-agent",
+  "version": "0.1.0",
+  "description": "Governed cloud operations and deployed-system administration for Thelve.",
+  "author": {
+    "name": "Thelve"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Thelve Agent",
+    "shortDescription": "Safely deploy and administer Thelve.",
+    "longDescription": "Use signed AAuth capability plans with human confirmation, plus secure GCP and AWS single-node operations.",
+    "developerName": "Thelve",
+    "category": "Developer Tools",
+    "capabilities": ["skills"],
+    "defaultPrompt": "Inspect my Thelve deployment and propose any changes as immutable human-reviewed plans."
+  }
+}

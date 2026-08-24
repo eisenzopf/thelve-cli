@@ -1,0 +1,9 @@
+/target/
+/.thelve/
+*.tfplan
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.tfstate.lock.info
+crash.log
+deployment.local.yaml

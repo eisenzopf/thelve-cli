@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thelve.io/contracts/thelve-gcp-preview-release-v1.schema.json",
+  "title": "Thelve private GCP preview release v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "metadata", "spec"],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gcsUri", "httpsUri", "sha256", "sizeBytes"],
+      "properties": {
+        "gcsUri": {"type": "string", "pattern": "^gs://[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]/[A-Za-z0-9._/-]+$", "maxLength": 2048},
+        "httpsUri": {"type": "string", "pattern": "^https://storage.googleapis.com/[A-Za-z0-9._/-]+$", "maxLength": 2048},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "sizeBytes": {"type": "integer", "minimum": 1, "maximum": 2147483648}
+      }
+    }
+  },
+  "properties": {
+    "schemaVersion": {"const": "thelve.gcp-preview-release/v1"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release", "releaseId", "createdAt", "sourceCommit", "sourceTreeSha256", "cloudBuildId", "previewOnly"],
+      "properties": {
+        "release": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-preview\\.[0-9]+$"},
+        "releaseId": {"type": "string", "format": "uuid"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "sourceCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "sourceTreeSha256": {"$ref": "#/$defs/sha256"},
+        "cloudBuildId": {"type": "string", "format": "uuid"},
+        "previewOnly": {"const": true}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "region", "registryPrefix", "deploymentReleaseSha256", "deploymentBundle", "nodeManager", "offlineTrustStore", "catalogTrustRoot", "images", "qualification"],
+      "properties": {
+        "projectId": {"type": "string", "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"},
+        "region": {"type": "string", "pattern": "^[a-z]+-[a-z]+[0-9]$"},
+        "registryPrefix": {"type": "string", "pattern": "^[a-z]+-[a-z]+[0-9]-docker\\.pkg\\.dev/[a-z0-9-]+/[a-z0-9-]+$"},
+        "deploymentReleaseSha256": {"$ref": "#/$defs/sha256"},
+        "deploymentBundle": {"$ref": "#/$defs/object"},
+        "nodeManager": {"$ref": "#/$defs/object"},
+        "offlineTrustStore": {"$ref": "#/$defs/object"},
+        "catalogTrustRoot": {"$ref": "#/$defs/object"},
+        "images": {
+          "type": "array",
+          "minItems": 15,
+          "maxItems": 15,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["componentId", "repository", "digest"],
+            "properties": {
+              "componentId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]+$"},
+              "repository": {"type": "string", "pattern": "^[a-z]+-[a-z]+[0-9]-docker\\.pkg\\.dev/[A-Za-z0-9._/-]+$"},
+              "digest": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        },
+        "qualification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["productionQualified", "requiresExplicitPreviewAdmission", "openGates"],
+          "properties": {
+            "productionQualified": {"const": false},
+            "requiresExplicitPreviewAdmission": {"const": true},
+            "openGates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+          }
+        }
+      }
+    }
+  }
+}

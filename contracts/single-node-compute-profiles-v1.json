@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "thelve.single-node-compute-profiles/v1",
+  "profiles": {
+    "budget_smoke": {
+      "displayName": "Budget smoke",
+      "intendedUse": "Configuration, install, UI, and short functional smoke tests; not live production telephony.",
+      "vcpu": 2,
+      "memoryMiB": 8192,
+      "production": false,
+      "providers": {
+        "gcp": {"machineType": "e2-standard-2"},
+        "aws": {"instanceType": "t3.large"}
+      }
+    },
+    "recommended_test": {
+      "displayName": "Recommended test",
+      "intendedUse": "Normal Telnyx inbound-call, browser-agent, integration, and rehearsal testing.",
+      "vcpu": 4,
+      "memoryMiB": 16384,
+      "production": false,
+      "providers": {
+        "gcp": {"machineType": "e2-standard-4"},
+        "aws": {"instanceType": "t3.xlarge"}
+      }
+    },
+    "production_baseline": {
+      "displayName": "Production baseline",
+      "intendedUse": "Initial measured production deployment on non-burstable general-purpose compute.",
+      "vcpu": 4,
+      "memoryMiB": 16384,
+      "production": true,
+      "providers": {
+        "gcp": {"machineType": "n2-standard-4"},
+        "aws": {"instanceType": "m7i.xlarge"}
+      }
+    },
+    "production_growth": {
+      "displayName": "Production growth",
+      "intendedUse": "Vertically scaled production deployment before moving media or control roles to additional nodes.",
+      "vcpu": 8,
+      "memoryMiB": 32768,
+      "production": true,
+      "providers": {
+        "gcp": {"machineType": "n2-standard-8"},
+        "aws": {"instanceType": "m7i.2xlarge"}
+      }
+    }
+  }
+}

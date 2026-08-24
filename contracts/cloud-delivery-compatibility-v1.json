@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "thelve.cross-repository-compatibility/v1",
+  "contractSet": "0.1.0",
+  "repositories": {
+    "product": "Thelve",
+    "cli": "thelve-cli",
+    "imageFactory": "thelve-image-factory"
+  },
+  "contracts": {
+    "singleNodeComputeProfiles": {"version": "thelve.single-node-compute-profiles/v1", "sha256": "sha256:39e3bb3dd6e0afbcf6abc6e68ef7fbbce375527590a1cdfc2979c0471694b8d9"},
+    "productRelease": {"version": "thelve.product-release/v1", "sha256": "sha256:24f5e7c8902ed13830bbeb8e28db0cd789ebc1c6f100fe6ab2ec928fe5823569"},
+    "machineImageCatalog": {"version": "thelve.machine-image-catalog/v1", "sha256": "sha256:13e87627a4edb8ee5ad55cf08b48e5e4be1164bfd1042170c10c2f4c24e2e6ed"},
+    "detachedSignature": {"version": "thelve.detached-signature/v1", "sha256": "sha256:f54fb1172966f4e5963dfa806f3114dcf70783a6695d6d7f2165fa5b78f613a8"},
+    "trustRoot": {"version": "thelve.trust-root/v1", "sha256": "sha256:417385b627867cd73c02722ba4d1bc2b445c214bf9b3ff920baf243d52f92fe0"},
+    "releaseChannel": {"version": "thelve.release-channel/v1", "sha256": "sha256:3203caf495d5bfa9eb8d19c9ec78365c1fb75069be0bd24e6a62f55bef5d51c1"}
+  },
+  "compatibility": {
+    "cli": ">=0.1.0,<1.0.0",
+    "hostContract": "thelve.single-node-cloud-bootstrap/v1",
+    "requiredRuntimeSecrets": ["database-url", "migration-database-url", "realtime-callback-database-url", "realtime-internal-token", "control-api-service-token", "postgres-password", "redis-password", "keycloak-database-password", "minio-root-user", "minio-root-password", "oidc/client-secret", "backup/destination", "telnyx-api-key", "telnyx-public-key"],
+    "architecture": ["linux/x86_64"]
+  }
+}

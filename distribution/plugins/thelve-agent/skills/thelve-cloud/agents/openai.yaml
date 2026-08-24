@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thelve Cloud"
+  short_description: "Deploy and operate a secure Thelve cloud single node"
+  default_prompt: "Use the Thelve CLI to plan and operate a secure single-node deployment in GCP or AWS without exposing secrets."

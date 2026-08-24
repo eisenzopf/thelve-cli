@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thelve.io/contracts/thelve-product-release-v1.json",
+  "title": "Thelve product release v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "metadata", "spec"],
+  "properties": {
+    "schemaVersion": {"const": "thelve.product-release/v1"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release", "releaseId", "sourceCommit", "createdAt"],
+      "properties": {
+        "release": {"type": "string", "minLength": 1, "maxLength": 128},
+        "releaseId": {"type": "string", "format": "uuid"},
+        "sourceCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "createdAt": {"type": "string", "format": "date-time"}
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtimeCatalogSha256", "deploymentRelease", "hostContract", "cliCompatibility", "images", "artifacts", "verification"],
+      "properties": {
+        "runtimeCatalogSha256": {"$ref": "#/$defs/digest"},
+        "deploymentRelease": {"$ref": "#/$defs/signedObject"},
+        "hostContract": {"const": "thelve.single-node-cloud-bootstrap/v1"},
+        "cliCompatibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minimumVersion", "maximumExclusiveVersion"],
+          "properties": {
+            "minimumVersion": {"$ref": "#/$defs/version"},
+            "maximumExclusiveVersion": {"$ref": "#/$defs/version"}
+          }
+        },
+        "images": {
+          "type": "array",
+          "minItems": 15,
+          "maxItems": 15,
+          "items": {"$ref": "#/$defs/image"}
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/artifact"},
+          "allOf": [
+            {"contains": {"properties": {"kind": {"const": "deployment_kit"}}}},
+            {"contains": {"properties": {"kind": {"const": "node_manager"}}}}
+          ]
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requireIdenticalMirrorDigests", "requireSourceInventory", "requireSignatures", "requireSbom", "requireProvenance", "requireVulnerabilityReport", "requireLicenseManifest", "requireMalwareScan"],
+          "properties": {
+            "requireIdenticalMirrorDigests": {"const": true},
+            "requireSourceInventory": {"const": true},
+            "requireSignatures": {"const": true},
+            "requireSbom": {"const": true},
+            "requireProvenance": {"const": true},
+            "requireVulnerabilityReport": {"const": true},
+            "requireLicenseManifest": {"const": true},
+            "requireMalwareScan": {"const": true}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "httpsUri": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "signedObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "sha256", "signatureUri"],
+      "properties": {
+        "uri": {"$ref": "#/$defs/httpsUri"},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "signatureUri": {"$ref": "#/$defs/httpsUri"}
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["componentId", "digest", "mirrors", "evidenceBundle"],
+      "properties": {
+        "componentId": {"$ref": "#/$defs/id"},
+        "digest": {"$ref": "#/$defs/digest"},
+        "mirrors": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gcpArtifactRegistry", "awsEcr"],
+          "properties": {
+            "gcpArtifactRegistry": {"type": "string", "pattern": "^[a-z0-9-]+-docker\\.pkg\\.dev/[A-Za-z0-9._/-]+$", "maxLength": 512},
+            "awsEcr": {"type": "string", "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[A-Za-z0-9._/-]+$", "maxLength": 512}
+          }
+        },
+        "evidenceBundle": {"$ref": "#/$defs/signedObject"}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "operatingSystem", "architecture", "object"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "kind": {"enum": ["deployment_kit", "node_manager"]},
+        "operatingSystem": {"const": "linux"},
+        "architecture": {"const": "x86_64"},
+        "object": {"$ref": "#/$defs/signedObject"}
+      }
+    }
+  }
+}

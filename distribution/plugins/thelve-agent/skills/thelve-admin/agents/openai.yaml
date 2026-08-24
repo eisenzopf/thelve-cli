@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thelve Admin"
+  short_description: "Safely inspect, plan, approve, and test a deployed Thelve system"
+  default_prompt: "Use Thelve's governed API to inspect the deployment, propose exact configuration plans, wait for human confirmation, and apply only approved plans."

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thelve.io/contracts/thelve-trust-root-v1.schema.json",
+  "title": "Thelve catalog trust root v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "keys"],
+  "properties": {
+    "schemaVersion": {"const": "thelve.trust-root/v1"},
+    "keys": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["keyId", "algorithm", "publicKeyBase64", "status"],
+        "properties": {
+          "keyId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+          "algorithm": {"const": "ed25519"},
+          "publicKeyBase64": {"type": "string", "minLength": 44, "maxLength": 44},
+          "status": {"enum": ["active", "revoked"]}
+        }
+      }
+    }
+  }
+}

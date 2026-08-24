@@ -1,0 +1,112 @@
+#!/bin/sh
+set -eu
+umask 027
+
+receipt=/var/lib/thelve-bootstrap/aws-v1.complete
+if [ -f "$receipt" ]; then
+  exit 0
+fi
+
+for command in docker containerd chronyd nft jq curl sha256sum rsyslogd; do
+  command -v "$command" >/dev/null
+done
+docker compose version >/dev/null
+test -x /usr/local/libexec/thelve-image-qualification
+/usr/local/libexec/thelve-image-qualification >/dev/null
+
+# IMDSv2 is needed by the privileged host materializer and SSM, not by
+# application containers. Hop limit one protects bridged containers; these
+# nftables hooks also cover host-network Caddy and realtime gateway UIDs.
+install -d -m 0755 /etc/thelve
+cat > /etc/thelve/metadata-guard.nft <<'EOF'
+table inet thelve_metadata_guard {
+  chain output {
+    type filter hook output priority -150; policy accept;
+    ip daddr 169.254.169.254 meta skuid { 999, 1000, 10001 } reject
+  }
+  chain forward {
+    type filter hook forward priority -150; policy accept;
+    ip daddr 169.254.169.254 reject
+  }
+}
+EOF
+cat > /etc/systemd/system/thelve-metadata-guard.service <<'EOF'
+[Unit]
+Description=Block Thelve containers from the cloud metadata service
+After=network-pre.target docker.service
+Before=thelve.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/nft delete table inet thelve_metadata_guard
+ExecStart=/usr/sbin/nft --file /etc/thelve/metadata-guard.nft
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now thelve-metadata-guard.service
+
+%{ if enable_cloudwatch_agent ~}
+curl --fail --silent --show-error --location \
+  --output /tmp/amazon-cloudwatch-agent.deb \
+  '${cloudwatch_agent_package_url}'
+printf '%s  %s\n' '${cloudwatch_agent_package_sha256}' /tmp/amazon-cloudwatch-agent.deb | sha256sum --check --strict
+dpkg --install /tmp/amazon-cloudwatch-agent.deb
+rm -f /tmp/amazon-cloudwatch-agent.deb
+
+install -d -m 0755 /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/40-thelve-cloudwatch.conf <<'EOF'
+[Journal]
+ForwardToSyslog=yes
+EOF
+cat > /etc/rsyslog.d/40-thelve.conf <<'EOF'
+if ($programname startswith "thelve.") then /var/log/thelve-cloudwatch.log
+& stop
+EOF
+cat > /etc/logrotate.d/thelve-cloudwatch <<'EOF'
+/var/log/thelve-cloudwatch.log {
+  daily
+  rotate 14
+  size 100M
+  compress
+  missingok
+  notifempty
+  copytruncate
+}
+EOF
+cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<'EOF'
+{
+  "agent": {"metrics_collection_interval": 60, "run_as_user": "root"},
+  "metrics": {
+    "namespace": "Thelve/SingleNode",
+    "append_dimensions": {"InstanceId": "$${aws:InstanceId}"},
+    "metrics_collected": {
+      "cpu": {"measurement": ["cpu_usage_idle", "cpu_usage_iowait"], "totalcpu": true},
+      "disk": {"measurement": ["used_percent", "inodes_free"], "resources": ["/"]},
+      "mem": {"measurement": ["mem_used_percent"]},
+      "netstat": {"measurement": ["tcp_established", "udp_socket"]}
+    }
+  },
+  "logs": {
+    "logs_collected": {"files": {"collect_list": [{
+      "file_path": "/var/log/thelve-cloudwatch.log",
+      "log_group_name": "${cloudwatch_log_group}",
+      "log_stream_name": "{instance_id}",
+      "retention_in_days": -1
+    }]}}
+  }
+}
+EOF
+systemctl restart systemd-journald rsyslog
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+%{ endif ~}
+
+systemctl enable --now docker
+systemctl enable --now chrony
+install -d -m 0750 /var/lib/thelve-bootstrap
+printf 'schema=thelve.single-node-cloud-bootstrap/v1\nprovider=aws\nsecret_values_recorded=false\n' > "$receipt"
+chmod 0640 "$receipt"

@@ -1,0 +1,51 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked --release
+
+  terraform:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [gcp-single-node, aws-single-node]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.5
+      - name: Initialize without a backend
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/terraform-data-${{ matrix.module }}
+        run: terraform -chdir=modules/${{ matrix.module }} init -backend=false -input=false
+      - name: Validate embedded provider module
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/terraform-data-${{ matrix.module }}
+        run: terraform -chdir=modules/${{ matrix.module }} validate
+
+  no-secret-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject credentials and private product imports
+        run: |
+          ! grep -RIE --exclude-dir=.git --exclude='Cargo.lock' '(AKIA[0-9A-Z]{16}|telnyx[-_ ]?(api[-_ ]?)?key.{0,4}[A-Za-z0-9_-]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY)' .
+          ! grep -RIE --exclude-dir=.git 'thelve-(domain|db|capability|runtime-config)[[:space:]]*=' Cargo.toml src

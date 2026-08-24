@@ -1,0 +1,8 @@
+{
+  "name": "thelve-agent",
+  "version": "0.1.0",
+  "description": "Governed cloud operations and deployed-system administration for Thelve.",
+  "author": {
+    "name": "Thelve"
+  }
+}

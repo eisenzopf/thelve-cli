@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thelve.io/contracts/thelve-detached-signature-v1.schema.json",
+  "title": "Thelve detached signature v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "algorithm", "keyId", "documentSha256", "signatureBase64"],
+  "properties": {
+    "schemaVersion": {"const": "thelve.detached-signature/v1"},
+    "algorithm": {"const": "ed25519"},
+    "keyId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+    "documentSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "signatureBase64": {"type": "string", "minLength": 88, "maxLength": 88}
+  }
+}

@@ -1,0 +1,60 @@
+name: release-binaries
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build-sign-publish:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            archive: tar.gz
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          targets: ${{ matrix.target }}
+      - name: Install static Linux linker
+        if: endsWith(matrix.target, '-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+      - run: cargo test --locked
+      - run: cargo build --locked --release --target "${{ matrix.target }}"
+      - name: Package compiled binary only
+        id: package
+        shell: bash
+        run: |
+          artifact="thelve-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          tar -C "target/${{ matrix.target }}/release" -czf "$artifact" thelve
+          shasum -a 256 "$artifact" > "$artifact.sha256"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+      - uses: sigstore/cosign-installer@v3
+      - name: Keyless-sign exact archive
+        shell: bash
+        run: cosign sign-blob --yes --bundle "${{ steps.package.outputs.artifact }}.sigstore.json" "${{ steps.package.outputs.artifact }}"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.package.outputs.artifact }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.artifact }}.sha256
+            ${{ steps.package.outputs.artifact }}.sigstore.json

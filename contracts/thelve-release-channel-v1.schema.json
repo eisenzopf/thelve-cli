@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://thelve.io/contracts/thelve-release-channel-v1.schema.json",
+  "title": "Thelve signed release channel v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "metadata", "release"],
+  "properties": {
+    "schemaVersion": {"const": "thelve.release-channel/v1"},
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "sequence", "updatedAt", "expiresAt"],
+      "properties": {
+        "channel": {"enum": ["preview", "stable"]},
+        "sequence": {"type": "integer", "minimum": 1},
+        "updatedAt": {"type": "string", "format": "date-time"},
+        "expiresAt": {"type": "string", "format": "date-time"}
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "manifestUri", "manifestSha256", "signatureUri"],
+      "properties": {
+        "version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "manifestUri": {"type": "string", "format": "uri", "pattern": "^https://"},
+        "manifestSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "signatureUri": {"type": "string", "format": "uri", "pattern": "^https://"}
+      }
+    }
+  }
+}

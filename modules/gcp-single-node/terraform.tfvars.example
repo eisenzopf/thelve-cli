@@ -1,0 +1,50 @@
+project_id = "your-google-cloud-project"
+region     = "us-west1"
+zone       = "us-west1-b"
+name       = "thelve"
+environment = "test"
+
+# Select only an active exact image from the verified Thelve machine catalog.
+source_image = "projects/thelve-images/global/images/thelve-host-0-1-0-preview-1"
+compute_profile = "recommended_test"
+instance_status = "RUNNING"
+
+# Verify these from Telnyx's current authoritative networking documentation.
+telnyx_cidr_source_version = "telnyx-observed-2026-08-23"
+telnyx_signaling_cidrs = [
+  "192.76.120.0/24",
+  "64.16.250.0/24",
+  "185.246.41.0/24",
+  "103.115.244.0/23"
+]
+telnyx_media_cidrs = ["replace-with-current-telnyx-media-cidr"]
+
+# These are version references only. Populate each secret version out of band.
+secret_versions = {
+  "database-url"                  = "1"
+  "migration-database-url"        = "1"
+  "realtime-callback-database-url" = "1"
+  "realtime-internal-token"       = "1"
+  "control-api-service-token"     = "1"
+  "postgres-password"             = "1"
+  "redis-password"                = "1"
+  "keycloak-database-password"    = "1"
+  "minio-root-user"               = "1"
+  "minio-root-password"           = "1"
+  "oidc/client-secret"            = "1"
+  "backup/destination"            = "1"
+  "telnyx-api-key"                = "1"
+  "telnyx-public-key"             = "1"
+}
+
+# IAM members are examples; use groups rather than individual users where practical.
+admin_principals = ["group:thelve-operators@example.com"]
+enable_iap_ssh   = true
+
+# Optional provider-native export requires one immutable package and digest.
+enable_ops_agent          = false
+ops_agent_package_url     = ""
+ops_agent_package_sha256  = ""
+
+# Set RUNNING to TERMINATED and apply to stop VM compute charges while retaining
+# the static IP, disk, secret containers, and backup bucket.

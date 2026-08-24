@@ -1,0 +1,48 @@
+region            = "us-west-2"
+availability_zone = "us-west-2a"
+name               = "thelve"
+environment        = "test"
+
+# Select only an active exact AMI from the verified Thelve machine catalog.
+ami_id           = "ami-0123456789abcdef0"
+compute_profile  = "recommended_test"
+instance_state   = "running"
+
+# Verify these from Telnyx's current authoritative networking documentation.
+telnyx_cidr_source_version = "telnyx-observed-2026-08-23"
+telnyx_signaling_cidrs = [
+  "192.76.120.0/24",
+  "64.16.250.0/24",
+  "185.246.41.0/24",
+  "103.115.244.0/23"
+]
+telnyx_media_cidrs = ["replace-with-current-telnyx-media-cidr"]
+
+# These are stage references only. Populate values through a separate rotation workflow.
+secret_version_stages = {
+  "database-url"                   = "AWSCURRENT"
+  "migration-database-url"         = "AWSCURRENT"
+  "realtime-callback-database-url" = "AWSCURRENT"
+  "realtime-internal-token"        = "AWSCURRENT"
+  "control-api-service-token"      = "AWSCURRENT"
+  "postgres-password"              = "AWSCURRENT"
+  "redis-password"                 = "AWSCURRENT"
+  "keycloak-database-password"     = "AWSCURRENT"
+  "minio-root-user"                = "AWSCURRENT"
+  "minio-root-password"            = "AWSCURRENT"
+  "oidc/client-secret"             = "AWSCURRENT"
+  "backup/destination"             = "AWSCURRENT"
+  "telnyx-api-key"                 = "AWSCURRENT"
+  "telnyx-public-key"              = "AWSCURRENT"
+}
+
+# SSM Session Manager is enabled by default. Keep this empty unless emergency SSH is required.
+admin_ssh_cidrs = []
+
+# Optional CloudWatch Agent installation requires an immutable package URL and digest.
+enable_cloudwatch_agent         = false
+cloudwatch_agent_package_url    = ""
+cloudwatch_agent_package_sha256 = ""
+
+# Set instance_state="stopped" and apply to pause VM compute charges while
+# retaining the EIP, encrypted EBS volume, secret containers, and backup bucket.
