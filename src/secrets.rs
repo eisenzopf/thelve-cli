@@ -276,18 +276,23 @@ pub fn verify_required_versions(
 
 fn version_exists(provider: &Provider, resource: &str) -> bool {
     match provider {
-        Provider::Gcp { project_id, .. } => process::capture(&CommandPlan::new("gcloud").args([
-            "secrets",
-            "versions",
-            "describe",
-            "1",
-            "--secret",
-            resource,
-            "--project",
-            project_id,
-            "--format=value(state)",
-        ]))
-        .is_ok_and(|state| state.trim() == "ENABLED"),
+        Provider::Gcp { project_id, .. } => {
+            let Some(secret_id) = gcp_secret_id(project_id, resource) else {
+                return false;
+            };
+            process::capture(&CommandPlan::new("gcloud").args([
+                "secrets",
+                "versions",
+                "describe",
+                "1",
+                "--secret",
+                secret_id,
+                "--project",
+                project_id,
+                "--format=value(state)",
+            ]))
+            .is_ok_and(|state| state.trim() == "ENABLED")
+        }
         Provider::Aws { region, .. } => {
             let output = process::capture(&CommandPlan::new("aws").args([
                 "secretsmanager",
@@ -311,6 +316,12 @@ fn version_exists(provider: &Provider, resource: &str) -> bool {
                 })
         }
     }
+}
+
+fn gcp_secret_id<'a>(project_id: &str, resource: &'a str) -> Option<&'a str> {
+    let prefix = format!("projects/{project_id}/secrets/");
+    let secret_id = resource.strip_prefix(&prefix)?;
+    (!secret_id.is_empty() && !secret_id.contains('/')).then_some(secret_id)
 }
 
 #[cfg(test)]
@@ -345,5 +356,34 @@ mod tests {
         ] {
             assert!(values.get(name).unwrap().contains(password.as_str()));
         }
+    }
+
+    #[test]
+    fn gcp_version_lookup_uses_an_exact_project_scoped_secret_id() {
+        assert_eq!(
+            gcp_secret_id(
+                "preview-project",
+                "projects/preview-project/secrets/thelve-postgres-password"
+            ),
+            Some("thelve-postgres-password")
+        );
+        assert_eq!(
+            gcp_secret_id(
+                "preview-project",
+                "projects/other-project/secrets/thelve-postgres-password"
+            ),
+            None
+        );
+        assert_eq!(
+            gcp_secret_id(
+                "preview-project",
+                "projects/preview-project/secrets/nested/secret"
+            ),
+            None
+        );
+        assert_eq!(
+            gcp_secret_id("preview-project", "projects/preview-project/secrets/"),
+            None
+        );
     }
 }

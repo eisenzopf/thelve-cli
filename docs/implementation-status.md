@@ -26,6 +26,10 @@ binary, application activation, and Telnyx workflow remain** · Updated
   by the earliest preview CLI; a real GCP rehearsal now guards this path.
 - Redacted plan, stopped-host prepare, required-secret gate, up, status,
   pause/resume, and exact-name destroy commands with explicit approvals.
+- GCP required-version checks convert Terraform's full secret resource name to
+  an exact same-project secret ID before invoking `gcloud`; the live gate now
+  recognizes all 12 generated versions and reports only the two intentionally
+  empty Telnyx inputs.
 - GCP Secret Manager and AWS Secrets Manager writes through hidden input/stdin;
   values never enter CLI argv or Terraform variables/state.
 - Fail-closed GCP internal-secret initialization generates one correlated
