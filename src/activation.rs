@@ -332,6 +332,7 @@ ulimit -n 65536
 stage={stage}
 registry_host={registry_host}
 cleanup() {{ rm -rf -- "$stage"; }}
+sudo_node() {{ sudo sh -c 'ulimit -n 65536; exec "$@"' thelve-node "$@"; }}
 trap cleanup EXIT
 printf '%s  %s\n' {node_sha} "$stage/thelve-node" | sha256sum --check --strict - >/dev/null
 printf '%s  %s\n' {bundle_sha} "$stage/bundle.tar.gz" | sha256sum --check --strict - >/dev/null
@@ -347,9 +348,9 @@ awk 'index($0, "/../") || $0 ~ /^\.\.\// || $0 ~ /^\// || $0 !~ /^bundle\// {{ e
 awk 'substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d" {{ exit 1 }}' "$stage/bundle.verbose"
 mkdir "$stage/release"
 tar --no-same-owner --no-same-permissions -xzf "$stage/bundle.tar.gz" -C "$stage/release"
-sudo "$stage/thelve-node" verify --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/verify.json"
-sudo "$stage/thelve-node" preflight --activation --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/preflight.json"
-sudo "$stage/thelve-node" install --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" --operation-id {operation_id} > "$stage/install.json"
+sudo_node "$stage/thelve-node" verify --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/verify.json"
+sudo_node "$stage/thelve-node" preflight --activation --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/preflight.json"
+sudo_node "$stage/thelve-node" install --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" --operation-id {operation_id} > "$stage/install.json"
 test -x /usr/local/bin/docker-credential-gcr
 sudo grep -Fqx 'Environment=DOCKER_CONFIG=/etc/thelve/docker' /etc/systemd/system/thelve.service
 sudo install -d -o root -g root -m 0700 /etc/thelve/docker
@@ -357,9 +358,9 @@ sudo grep -Fqx 'Environment=PATH=/usr/local/bin:/usr/bin:/bin' /etc/systemd/syst
 sudo env HOME=/root DOCKER_CONFIG=/etc/thelve/docker PATH=/usr/local/bin:/usr/bin:/bin /usr/local/bin/docker-credential-gcr configure-docker --registries="$registry_host" >/dev/null
 sudo jq -e --arg host "$registry_host" 'keys == ["credHelpers"] and (.credHelpers | length == 1) and .credHelpers[$host] == "gcr"' /etc/thelve/docker/config.json >/dev/null
 test "$(sudo stat -c '%U:%G:%a' /etc/thelve/docker/config.json)" = root:root:600
-sudo /opt/thelve/bin/thelve-node activate-secrets --config /etc/thelve/node.yaml > "$stage/secrets.json"
-sudo /opt/thelve/bin/thelve-node start > "$stage/start.json"
-sudo /opt/thelve/bin/thelve-node readiness > "$stage/readiness.json"
+sudo_node /opt/thelve/bin/thelve-node activate-secrets --config /etc/thelve/node.yaml > "$stage/secrets.json"
+sudo_node /opt/thelve/bin/thelve-node start > "$stage/start.json"
+sudo_node /opt/thelve/bin/thelve-node readiness > "$stage/readiness.json"
 jq -n --arg operationId {operation_id} --arg registryHost "$registry_host" --slurpfile verify "$stage/verify.json" --slurpfile preflight "$stage/preflight.json" --slurpfile install "$stage/install.json" --slurpfile secrets "$stage/secrets.json" --slurpfile start "$stage/start.json" --slurpfile readiness "$stage/readiness.json" '{{schemaVersion:"thelve.gcp-activation-receipt/v1",operationId:$operationId,verification:$verify[0],preflight:$preflight[0],install:$install[0],secretActivation:$secrets[0],registryAccess:{{host:$registryHost,credentialHelper:"docker-credential-gcr",dockerConfig:"/etc/thelve/docker/config.json",accessTokenPersisted:false}},serviceAction:$start[0],readiness:$readiness[0],secretValuesRecorded:false}}'"#
     )
 }
@@ -604,6 +605,8 @@ mod tests {
         assert!(command.contains("docker-credential-gcr configure-docker"));
         assert!(command.contains("accessTokenPersisted:false"));
         assert!(command.contains("ulimit -n 65536"));
+        assert!(command.contains("sudo_node()"));
+        assert!(!command.contains("sudo \"$stage/thelve-node\" preflight"));
         assert!(command.contains("secretValuesRecorded:false"));
         assert!(!command.contains("api-key"));
         assert!(!command.contains("oauth2accesstoken"));
