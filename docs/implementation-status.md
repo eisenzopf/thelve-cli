@@ -20,6 +20,9 @@ workflow pending** · Updated 2026-08-24
 - Embedded GCP and AWS single-node Terraform modules plus byte-identical
   cross-repository compatibility gates.
 - Versioned GCS or encrypted/versioned/locked S3 remote-state bootstrap.
+- Backend initialization passes only provider-specific values to the module's
+  single declared backend, and idempotently removes the duplicate block emitted
+  by the earliest preview CLI; a real GCP rehearsal now guards this path.
 - Redacted plan, stopped-host prepare, required-secret gate, up, status,
   pause/resume, and exact-name destroy commands with explicit approvals.
 - GCP Secret Manager and AWS Secrets Manager writes through hidden input/stdin;

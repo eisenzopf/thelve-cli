@@ -15,6 +15,8 @@ use crate::{
 static GCP_MODULE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/modules/gcp-single-node");
 static AWS_MODULE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/modules/aws-single-node");
 const COMPUTE_CATALOG: &[u8] = include_bytes!("../contracts/single-node-compute-profiles-v1.json");
+const BACKEND_ARGS_FILE: &str = ".thelve-backend-args.json";
+const LEGACY_BACKEND_BLOCK_FILE: &str = "backend.auto.tf.json";
 
 #[derive(Clone, Copy, Debug)]
 pub enum HostState {
@@ -158,12 +160,22 @@ pub fn secret_resources(
 }
 
 fn init(directory: &Path) -> Result<()> {
-    process::inherit(&CommandPlan::new(iac_binary()?).args([
+    let backend_bytes = fs::read(directory.join(BACKEND_ARGS_FILE)).with_context(|| {
+        format!(
+            "read generated backend configuration {}",
+            directory.join(BACKEND_ARGS_FILE).display()
+        )
+    })?;
+    let backend_args: Vec<String> =
+        serde_json::from_slice(&backend_bytes).context("parse generated backend configuration")?;
+    let mut args = vec![
         format!("-chdir={}", directory.display()),
         "init".into(),
         "-input=false".into(),
         "-no-color".into(),
-    ]))
+    ];
+    args.extend(backend_args);
+    process::inherit(&CommandPlan::new(iac_binary()?).args(args))
 }
 
 fn prepare_workspace(
@@ -185,10 +197,18 @@ fn prepare_workspace(
         &contracts.join("single-node-compute-profiles-v1.json"),
         COMPUTE_CATALOG,
     )?;
-    let backend = backend_config(intent);
+    // Old preview builds wrote a complete backend declaration beside the
+    // module's own `backend "gcs" {}` / `backend "s3" {}` declaration.
+    // Terraform correctly rejects two declarations, so remove only that exact
+    // generated legacy file during the idempotent workspace refresh.
+    let legacy_backend = directory.join(LEGACY_BACKEND_BLOCK_FILE);
+    if legacy_backend.exists() {
+        fs::remove_file(&legacy_backend)
+            .with_context(|| format!("remove legacy backend block {}", legacy_backend.display()))?;
+    }
     write_if_changed(
-        &directory.join("backend.auto.tf.json"),
-        &serde_json::to_vec_pretty(&backend)?,
+        &directory.join(BACKEND_ARGS_FILE),
+        &serde_json::to_vec_pretty(&backend_args(intent))?,
     )?;
     let variables = variables(intent, state);
     write_if_changed(
@@ -216,23 +236,22 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn backend_config(intent: &CloudDeployment) -> serde_json::Value {
+fn backend_args(intent: &CloudDeployment) -> Vec<String> {
     match &intent.spec.provider {
-        Provider::Gcp { .. } => serde_json::json!({
-            "terraform": {"backend": {"gcs": {
-                "bucket": intent.spec.state.bucket,
-                "prefix": intent.spec.state.prefix
-            }}}
-        }),
-        Provider::Aws { region, .. } => serde_json::json!({
-            "terraform": {"backend": {"s3": {
-                "bucket": intent.spec.state.bucket,
-                "key": format!("{}/terraform.tfstate", intent.spec.state.prefix.trim_end_matches('/')),
-                "region": region,
-                "encrypt": true,
-                "use_lockfile": true
-            }}}
-        }),
+        Provider::Gcp { .. } => vec![
+            format!("-backend-config=bucket={}", intent.spec.state.bucket),
+            format!("-backend-config=prefix={}", intent.spec.state.prefix),
+        ],
+        Provider::Aws { region, .. } => vec![
+            format!("-backend-config=bucket={}", intent.spec.state.bucket),
+            format!(
+                "-backend-config=key={}/terraform.tfstate",
+                intent.spec.state.prefix.trim_end_matches('/')
+            ),
+            format!("-backend-config=region={region}"),
+            "-backend-config=encrypt=true".into(),
+            "-backend-config=use_lockfile=true".into(),
+        ],
     }
 }
 
@@ -383,12 +402,44 @@ mod tests {
 
     #[test]
     fn provider_backends_are_remote_and_locked_or_versionable() {
-        let gcp = backend_config(&deployable(CloudProvider::Gcp));
-        assert!(gcp.pointer("/terraform/backend/gcs/bucket").is_some());
-        let aws = backend_config(&deployable(CloudProvider::Aws));
-        assert_eq!(
-            aws.pointer("/terraform/backend/s3/use_lockfile"),
-            Some(&serde_json::Value::Bool(true))
+        let gcp = backend_args(&deployable(CloudProvider::Gcp));
+        assert!(
+            gcp.iter()
+                .any(|argument| argument == "-backend-config=bucket=thelve-test-state-123")
         );
+        assert!(
+            gcp.iter()
+                .any(|argument| argument == "-backend-config=prefix=thelve/thelve-test/test")
+        );
+        let aws = backend_args(&deployable(CloudProvider::Aws));
+        assert!(
+            aws.iter()
+                .any(|argument| argument == "-backend-config=encrypt=true")
+        );
+        assert!(
+            aws.iter()
+                .any(|argument| argument == "-backend-config=use_lockfile=true")
+        );
+    }
+
+    #[test]
+    fn workspace_keeps_one_backend_declaration_and_removes_legacy_duplicate() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config_path = temporary.path().join("deployment.yaml");
+        let intent = deployable(CloudProvider::Gcp);
+        let directory = workspace(&config_path, &intent).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(LEGACY_BACKEND_BLOCK_FILE),
+            br#"{"terraform":{"backend":{"gcs":{}}}}"#,
+        )
+        .unwrap();
+
+        prepare_workspace(&config_path, &intent, HostState::Stopped).unwrap();
+
+        assert!(!directory.join(LEGACY_BACKEND_BLOCK_FILE).exists());
+        assert!(directory.join(BACKEND_ARGS_FILE).is_file());
+        let versions = fs::read_to_string(directory.join("versions.tf")).unwrap();
+        assert_eq!(versions.matches("backend \"gcs\"").count(), 1);
     }
 }
