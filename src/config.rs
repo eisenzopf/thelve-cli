@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    net::Ipv4Addr,
+    path::Path,
+};
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
@@ -173,6 +178,12 @@ pub struct Networking {
     pub rtp_port_start: u16,
     #[serde(default = "default_rtp_end")]
     pub rtp_port_end: u16,
+    #[serde(default = "default_webrtc_start")]
+    pub webrtc_port_start: u16,
+    #[serde(default = "default_webrtc_end")]
+    pub webrtc_port_end: u16,
+    #[serde(default = "default_webrtc_media_cidrs")]
+    pub webrtc_media_cidrs: Vec<String>,
 }
 
 impl CloudDeployment {
@@ -230,6 +241,9 @@ impl CloudDeployment {
                     sip_port: default_sip_port(),
                     rtp_port_start: default_rtp_start(),
                     rtp_port_end: default_rtp_end(),
+                    webrtc_port_start: default_webrtc_start(),
+                    webrtc_port_end: default_webrtc_end(),
+                    webrtc_media_cidrs: default_webrtc_media_cidrs(),
                 },
                 domains: BTreeMap::new(),
                 max_concurrent_inbound_calls: 2,
@@ -431,7 +445,50 @@ fn validate_networking(networking: &Networking) -> Result<()> {
     if networking.rtp_port_start != 16384 || networking.rtp_port_end != 32767 {
         bail!("the current gateway contract requires RTP 16384-32767");
     }
+    let webrtc_width = u32::from(networking.webrtc_port_end)
+        .checked_sub(u32::from(networking.webrtc_port_start))
+        .map(|width| width + 1);
+    if networking.webrtc_port_start <= networking.rtp_port_end
+        || !webrtc_width.is_some_and(|width| (16..=16_384).contains(&width))
+    {
+        bail!("browser media requires a separate bounded WebRTC UDP range");
+    }
+    let unique_webrtc_cidrs = networking
+        .webrtc_media_cidrs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if networking.webrtc_media_cidrs.is_empty()
+        || unique_webrtc_cidrs.len() != networking.webrtc_media_cidrs.len()
+        || networking
+            .webrtc_media_cidrs
+            .iter()
+            .any(|cidr| !valid_ipv4_cidr(cidr))
+    {
+        bail!("WebRTC media CIDRs must be canonical IPv4 networks");
+    }
     Ok(())
+}
+
+fn valid_ipv4_cidr(value: &str) -> bool {
+    let Some((address, prefix)) = value.split_once('/') else {
+        return false;
+    };
+    let Ok(address) = address.parse::<Ipv4Addr>() else {
+        return false;
+    };
+    let Ok(prefix) = prefix.parse::<u8>() else {
+        return false;
+    };
+    if prefix > 32 {
+        return false;
+    }
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - u32::from(prefix))
+    };
+    u32::from(address) & mask == u32::from(address)
 }
 
 fn valid_name(name: &str) -> bool {
@@ -455,6 +512,15 @@ const fn default_rtp_start() -> u16 {
 }
 const fn default_rtp_end() -> u16 {
     32767
+}
+const fn default_webrtc_start() -> u16 {
+    49152
+}
+const fn default_webrtc_end() -> u16 {
+    50175
+}
+fn default_webrtc_media_cidrs() -> Vec<String> {
+    vec!["0.0.0.0/0".into()]
 }
 
 pub fn load(path: &Path) -> Result<CloudDeployment> {
@@ -520,6 +586,12 @@ pub(crate) mod tests {
             template.spec.networking.telnyx_media_cidrs,
             strings(TELNYX_MEDIA_CIDRS)
         );
+        assert_eq!(template.spec.networking.webrtc_port_start, 49_152);
+        assert_eq!(template.spec.networking.webrtc_port_end, 50_175);
+        assert_eq!(
+            template.spec.networking.webrtc_media_cidrs,
+            vec!["0.0.0.0/0"]
+        );
     }
 
     #[test]
@@ -553,6 +625,18 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("media")
         );
+    }
+
+    #[test]
+    fn rejects_overlapping_or_noncanonical_browser_media_networking() {
+        let mut template = deployable(CloudProvider::Gcp);
+        template.spec.networking.webrtc_port_start = 32_000;
+        template.spec.networking.webrtc_port_end = 33_000;
+        assert!(template.validate().is_err());
+
+        let mut template = deployable(CloudProvider::Gcp);
+        template.spec.networking.webrtc_media_cidrs = vec!["203.0.113.1/24".into()];
+        assert!(template.validate().is_err());
     }
 
     #[test]

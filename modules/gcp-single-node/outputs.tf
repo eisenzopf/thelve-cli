@@ -46,6 +46,9 @@ output "node_config_fragment" {
       sipPort              = var.sip_port
       rtpStart             = var.rtp_port_start
       rtpEnd               = var.rtp_port_end
+      webrtcStart          = var.webrtc_port_start
+      webrtcEnd            = var.webrtc_port_end
+      webrtcMediaCidrs     = var.webrtc_media_cidrs
       telnyxSignalingCidrs = var.telnyx_signaling_cidrs
       telnyxMediaCidrs     = var.telnyx_media_cidrs
       cidrSourceVersion    = var.telnyx_cidr_source_version

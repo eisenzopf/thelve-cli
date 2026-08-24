@@ -95,6 +95,22 @@ resource "aws_vpc_security_group_ingress_rule" "telnyx_rtp" {
   cidr_ipv4         = each.value
 }
 
+resource "aws_vpc_security_group_ingress_rule" "browser_webrtc_media" {
+  for_each          = toset(var.webrtc_media_cidrs)
+  security_group_id = aws_security_group.thelve.id
+  description       = "Authenticated browser ICE and DTLS-SRTP media"
+  ip_protocol       = "udp"
+  from_port         = var.webrtc_port_start
+  to_port           = var.webrtc_port_end
+  cidr_ipv4         = each.value
+  lifecycle {
+    precondition {
+      condition     = var.webrtc_port_end >= var.webrtc_port_start && var.webrtc_port_start > var.rtp_port_end
+      error_message = "The WebRTC media range must be ordered and separate from the Telnyx RTP range."
+    }
+  }
+}
+
 # Telnyx's default AnchorSite=Latency selection measures round-trip time from
 # its media network with ICMP. Admit all ICMP types/codes only from the exact
 # carrier media ranges; this keeps regional media selection automatic without

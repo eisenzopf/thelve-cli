@@ -109,6 +109,24 @@ resource "google_compute_firewall" "telnyx_rtp" {
   }
 }
 
+resource "google_compute_firewall" "browser_webrtc_media" {
+  name          = "${local.prefix}-browser-webrtc-media"
+  network       = google_compute_network.thelve.name
+  direction     = "INGRESS"
+  source_ranges = var.webrtc_media_cidrs
+  target_tags   = [local.prefix]
+  allow {
+    protocol = "udp"
+    ports    = ["${var.webrtc_port_start}-${var.webrtc_port_end}"]
+  }
+  lifecycle {
+    precondition {
+      condition     = var.webrtc_port_end >= var.webrtc_port_start && var.webrtc_port_start > var.rtp_port_end
+      error_message = "The WebRTC media range must be ordered and separate from the Telnyx RTP range."
+    }
+  }
+}
+
 # Telnyx's default AnchorSite=Latency selection measures round-trip time from
 # its media network with ICMP. Limit echo traffic to the same explicit carrier
 # ranges as RTP so automatic nearest-PoP selection works without opening ICMP

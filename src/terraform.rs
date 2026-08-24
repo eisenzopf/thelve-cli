@@ -268,6 +268,9 @@ fn variables(intent: &CloudDeployment, state: HostState) -> serde_json::Value {
         "sip_port": networking.sip_port,
         "rtp_port_start": networking.rtp_port_start,
         "rtp_port_end": networking.rtp_port_end,
+        "webrtc_port_start": networking.webrtc_port_start,
+        "webrtc_port_end": networking.webrtc_port_end,
+        "webrtc_media_cidrs": networking.webrtc_media_cidrs,
         "domains": intent.spec.domains,
     });
     let mut value = common.as_object().cloned().expect("JSON object");

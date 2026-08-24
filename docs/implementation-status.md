@@ -17,6 +17,9 @@ Telnyx workflow remain** · Updated 2026-08-24
 - GCP and AWS carrier perimeters admit RTP plus AnchorSite ICMP probes only
   from the explicit Telnyx media profile, preserving automatic nearest-PoP
   media routing without global ICMP ingress.
+- GCP and AWS expose a separate configurable browser-media UDP range
+  (`49152-50175` by default), feed the range and source CIDRs into the node
+  contract, and never widen the Telnyx RTP perimeter for roaming agents.
 - Embedded GCP and AWS single-node Terraform modules plus byte-identical
   cross-repository compatibility gates.
 - Versioned GCS or encrypted/versioned/locked S3 remote-state bootstrap.

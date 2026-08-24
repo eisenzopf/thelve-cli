@@ -143,6 +143,36 @@ variable "rtp_port_end" {
   }
 }
 
+variable "webrtc_port_start" {
+  description = "First UDP port in the browser ICE/DTLS-SRTP media range."
+  type        = number
+  default     = 49152
+  validation {
+    condition     = var.webrtc_port_start >= 1024 && var.webrtc_port_start <= 65520
+    error_message = "webrtc_port_start must leave room for a bounded media range."
+  }
+}
+
+variable "webrtc_port_end" {
+  description = "Last UDP port in the browser ICE/DTLS-SRTP media range."
+  type        = number
+  default     = 50175
+  validation {
+    condition     = var.webrtc_port_end >= 1024 && var.webrtc_port_end <= 65535
+    error_message = "webrtc_port_end must be a non-privileged UDP port."
+  }
+}
+
+variable "webrtc_media_cidrs" {
+  description = "Agent browser IPv4 source networks admitted to authenticated ICE/DTLS-SRTP media. Use 0.0.0.0/0 for roaming agents."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+  validation {
+    condition     = length(var.webrtc_media_cidrs) > 0
+    error_message = "webrtc_media_cidrs must contain at least one source network."
+  }
+}
+
 variable "admin_ssh_cidrs" {
   description = "Optional emergency SSH sources. Empty uses SSM Session Manager only."
   type        = list(string)
