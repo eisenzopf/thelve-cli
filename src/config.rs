@@ -12,10 +12,11 @@ use serde::{Deserialize, Serialize};
 pub const API_VERSION: &str = "thelve.io/v1alpha1";
 pub const KIND: &str = "CloudSingleNode";
 
-// Retrieved from Telnyx's published SIP signaling and media network profile on
-// 2026-08-24. Keeping the retrieval date in deployment intent makes the
-// firewall input auditable and lets operators reject an old CLI profile.
-const TELNYX_NETWORK_PROFILE_VERSION: &str = "telnyx-sip-network-2026-08-24";
+// Retrieved from Telnyx's machine-readable SIP signaling and media profile at
+// https://sip.telnyx.com/voice.json on 2026-08-24. Keeping the retrieval date
+// and revision in deployment intent makes the firewall input auditable and
+// lets operators reject an old CLI profile.
+const TELNYX_NETWORK_PROFILE_VERSION: &str = "telnyx-sip-network-2026-08-24-r2";
 const TELNYX_US_SIGNALING_CIDRS: &[&str] = &["192.76.120.10/32", "64.16.250.10/32"];
 const TELNYX_MEDIA_CIDRS: &[&str] = &[
     "36.255.198.128/25",
@@ -29,7 +30,9 @@ const TELNYX_MEDIA_CIDRS: &[&str] = &[
     "64.16.248.0/24",
     "64.16.249.0/24",
     "103.115.244.128/25",
+    "103.115.247.0/24",
     "185.246.41.128/25",
+    "185.246.42.128/28",
 ];
 
 pub const REQUIRED_SECRET_NAMES: &[&str] = &[
@@ -442,8 +445,8 @@ fn validate_networking(networking: &Networking) -> Result<()> {
             bail!("Telnyx {label} CIDRs must be explicit, current, and may not include 0.0.0.0/0");
         }
     }
-    if networking.rtp_port_start != 16384 || networking.rtp_port_end != 32767 {
-        bail!("the current gateway contract requires RTP 16384-32767");
+    if networking.rtp_port_start != 16384 || networking.rtp_port_end != 32768 {
+        bail!("the managed Telnyx SIP profile requires RTP 16384-32768");
     }
     let webrtc_width = u32::from(networking.webrtc_port_end)
         .checked_sub(u32::from(networking.webrtc_port_start))
@@ -511,7 +514,7 @@ const fn default_rtp_start() -> u16 {
     16384
 }
 const fn default_rtp_end() -> u16 {
-    32767
+    32768
 }
 const fn default_webrtc_start() -> u16 {
     49152

@@ -136,10 +136,10 @@ variable "rtp_port_start" {
 
 variable "rtp_port_end" {
   type    = number
-  default = 32767
+  default = 32768
   validation {
-    condition     = var.rtp_port_end == 32767
-    error_message = "The pinned RVoIP allocator requires rtp_port_end=32767."
+    condition     = var.rtp_port_end == 32768
+    error_message = "The managed Telnyx SIP profile requires rtp_port_end=32768."
   }
 }
 
