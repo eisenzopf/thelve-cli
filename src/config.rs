@@ -12,10 +12,13 @@ use serde::{Deserialize, Serialize};
 pub const API_VERSION: &str = "thelve.io/v1alpha1";
 pub const KIND: &str = "CloudSingleNode";
 
-// Retrieved from Telnyx's machine-readable SIP signaling and media profile at
-// https://sip.telnyx.com/voice.json on 2026-08-24. Keeping the retrieval date
-// and revision in deployment intent makes the firewall input auditable and
-// lets operators reject an old CLI profile.
+// Retrieved from Telnyx's `voice.json` profile (source version
+// 2026-05-25T00:00:00Z) and reviewed against https://sip.telnyx.com on
+// 2026-08-24. The media list below is the 14-subnet direct SIP/RTP list. The
+// two separately documented Telnyx TURN relay subnets are intentionally not
+// admitted because this deployment profile does not use Telnyx TURN. Keeping
+// the retrieval date and revision in deployment intent makes the firewall
+// input auditable and lets operators reject an old CLI profile.
 const TELNYX_NETWORK_PROFILE_VERSION: &str = "telnyx-sip-network-2026-08-24-r2";
 const TELNYX_US_SIGNALING_CIDRS: &[&str] = &["192.76.120.10/32", "64.16.250.10/32"];
 const TELNYX_MEDIA_CIDRS: &[&str] = &[
@@ -589,6 +592,13 @@ pub(crate) mod tests {
             template.spec.networking.telnyx_media_cidrs,
             strings(TELNYX_MEDIA_CIDRS)
         );
+        assert_eq!(TELNYX_MEDIA_CIDRS.len(), 14);
+        for turn_relay in ["64.16.246.96/27", "64.16.246.128/29"] {
+            assert!(!TELNYX_MEDIA_CIDRS.contains(&turn_relay));
+        }
+        assert_eq!(template.spec.networking.sip_port, 5_060);
+        assert_eq!(template.spec.networking.rtp_port_start, 16_384);
+        assert_eq!(template.spec.networking.rtp_port_end, 32_768);
         assert_eq!(template.spec.networking.webrtc_port_start, 49_152);
         assert_eq!(template.spec.networking.webrtc_port_end, 50_175);
         assert_eq!(
