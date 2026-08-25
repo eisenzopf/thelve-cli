@@ -13,6 +13,10 @@ corrected-release browser proof, AWS parity, and the Telnyx workflow remain** ·
 - Strict no-secret deployment intent and validation, including compute
   profiles, exact host-image IDs, Telnyx perimeter inputs, DNS, concurrency,
   and the complete runtime-secret inventory.
+- `maxConcurrentInboundCalls` is projected into the value-free SingleNode
+  activation contract and independently revalidated before upload. The
+  product renderer now uses that one value for gateway admission and Telnyx
+  inbound-channel reconciliation, so the CLI setting is no longer advisory.
 - Dated, CLI-embedded Telnyx US signaling and global media CIDRs for US cloud
   regions; unsupported regions keep fail-closed review sentinels.
 - GCP and AWS carrier perimeters admit RTP plus AnchorSite ICMP probes only
@@ -76,6 +80,8 @@ corrected-release browser proof, AWS parity, and the Telnyx workflow remain** ·
   was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
+- All 39 CLI tests and strict Clippy pass with the exact-capacity activation
+  regression; corrected product publication and live receipt remain pending.
 - Public repository `https://github.com/eisenzopf/thelve-cli` hosts `main`; its
   first standard-runner verification passed every Rust, Terraform and
   no-secret job. Repository defaults are read-only Actions tokens, squash-only

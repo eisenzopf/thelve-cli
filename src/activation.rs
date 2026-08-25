@@ -94,6 +94,9 @@ pub fn render_node_config(
             "deploymentShape": "single_node",
             "computeProfile": intent.spec.compute_profile,
             "releaseRef": receipt.deployment_release_sha256,
+            "capacity": {
+                "maxConcurrentInboundCalls": intent.spec.max_concurrent_inbound_calls
+            },
             "domains": domains,
             "networking": networking,
             "data": {
@@ -770,6 +773,10 @@ fn validate_node_config(
             != Some(intent.metadata.name.as_str())
         || value.pointer("/spec/releaseRef").and_then(Value::as_str) != Some(release_sha256)
         || value
+            .pointer("/spec/capacity/maxConcurrentInboundCalls")
+            .and_then(Value::as_u64)
+            != Some(u64::from(intent.spec.max_concurrent_inbound_calls))
+        || value
             .pointer("/spec/networking/advertisedIpv4")
             .and_then(Value::as_str)
             != Some(public_ip)
@@ -983,6 +990,39 @@ mod tests {
         assert!(valid_fqdn("app.example.com"));
         assert!(!valid_fqdn("localhost"));
         assert!(!valid_email("not-an-email"));
+    }
+
+    #[test]
+    fn node_config_capacity_must_match_deployment_intent() {
+        let intent = CloudDeployment::template(
+            crate::config::CloudProvider::Gcp,
+            "thelve-test".into(),
+            Some("thelve-preview-123456".into()),
+            "us-west1".into(),
+            "us-west1-b".into(),
+        )
+        .expect("deployment intent");
+        let mut document = json!({
+            "apiVersion": "thelve.io/v1alpha1",
+            "kind": "SingleNode",
+            "metadata": {"name": "thelve-test"},
+            "spec": {
+                "releaseRef": format!("sha256:{}", "a".repeat(64)),
+                "capacity": {"maxConcurrentInboundCalls": 2},
+                "networking": {"advertisedIpv4": "203.0.113.10"},
+                "secretBindings": [{"id": "database-url"}]
+            }
+        });
+        let release = format!("sha256:{}", "a".repeat(64));
+        let bytes = serde_yaml::to_string(&document).expect("node config");
+        validate_node_config(bytes.as_bytes(), &intent, &release, "203.0.113.10")
+            .expect("matching capacity");
+
+        *document
+            .pointer_mut("/spec/capacity/maxConcurrentInboundCalls")
+            .expect("capacity") = json!(3);
+        let bytes = serde_yaml::to_string(&document).expect("node config");
+        assert!(validate_node_config(bytes.as_bytes(), &intent, &release, "203.0.113.10").is_err());
     }
 
     #[test]
