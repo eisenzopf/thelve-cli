@@ -98,6 +98,14 @@ value in a command argument or deployment file. Internal-secret initialization
 refuses a mixed version-1 state so correlated database credentials cannot drift
 after a partial attempt.
 
+For bundled PostgreSQL, initialization generates bridge-DNS URLs for the
+control plane and migrator and a separate `127.0.0.1:5432` URL for the
+host-network realtime gateway. `render-node-config` then verifies the exact
+GCP project and secret-binding set, resolves the newest enabled numeric version
+of every secret, and records those immutable version pins without reading any
+secret value. A later activation therefore adopts an intentional rotation but
+cannot silently follow a mutable alias.
+
 The TLS contact email is operational metadata, not a secret, but it must be a
 real operator-selected address for ACME notices. Do not substitute an example
 address in an actual activation. Stop after `prepare` if the contact or either
