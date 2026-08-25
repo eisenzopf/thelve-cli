@@ -426,6 +426,28 @@ mod tests {
     }
 
     #[test]
+    fn gcp_startup_preserves_only_dns_at_the_shared_metadata_address() {
+        let startup = GCP_MODULE
+            .get_file("startup.sh.tftpl")
+            .and_then(|file| file.contents_utf8())
+            .unwrap();
+        let uid_reject = startup.find("ip daddr 169.254.169.254 meta skuid").unwrap();
+        let forward_reject = startup.find("ip daddr 169.254.169.254 reject").unwrap();
+
+        for rule in [
+            "ip daddr 169.254.169.254 udp dport 53 accept",
+            "ip daddr 169.254.169.254 tcp dport 53 accept",
+        ] {
+            assert_eq!(startup.matches(rule).count(), 2);
+            let mut matches = startup.match_indices(rule).map(|(index, _)| index);
+            assert!(matches.next().unwrap() < uid_reject);
+            assert!(matches.next().unwrap() < forward_reject);
+        }
+        assert!(startup.contains("gcp-v2.complete"));
+        assert!(startup.contains("schema=thelve.single-node-cloud-bootstrap/v2"));
+    }
+
+    #[test]
     fn workspace_keeps_one_backend_declaration_and_removes_legacy_duplicate() {
         let temporary = tempfile::tempdir().unwrap();
         let config_path = temporary.path().join("deployment.yaml");

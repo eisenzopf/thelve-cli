@@ -2,7 +2,7 @@
 set -eu
 umask 027
 
-receipt=/var/lib/thelve-bootstrap/gcp-v1.complete
+receipt=/var/lib/thelve-bootstrap/gcp-v2.complete
 if [ -f "$receipt" ]; then
   exit 0
 fi
@@ -15,17 +15,22 @@ test -x /usr/local/libexec/thelve-image-qualification
 /usr/local/libexec/thelve-image-qualification >/dev/null
 
 # The privileged host materializer needs workload identity, but application
-# containers do not. Block bridge traffic and the admitted host-network UIDs
-# from reaching the link-local metadata service.
+# containers do not. GCP exposes its guest DNS resolver and metadata service on
+# the same link-local address, so admit only DNS before blocking bridge traffic
+# and the admitted host-network UIDs from all other metadata access.
 install -d -m 0755 /etc/thelve
 cat > /etc/thelve/metadata-guard.nft <<'EOF'
 table inet thelve_metadata_guard {
   chain output {
     type filter hook output priority -150; policy accept;
+    ip daddr 169.254.169.254 udp dport 53 accept
+    ip daddr 169.254.169.254 tcp dport 53 accept
     ip daddr 169.254.169.254 meta skuid { 999, 1000, 10001 } reject
   }
   chain forward {
     type filter hook forward priority -150; policy accept;
+    ip daddr 169.254.169.254 udp dport 53 accept
+    ip daddr 169.254.169.254 tcp dport 53 accept
     ip daddr 169.254.169.254 reject
   }
 }
@@ -60,5 +65,5 @@ rm -f /tmp/google-cloud-ops-agent.deb
 systemctl enable --now docker
 systemctl enable --now chrony
 install -d -m 0750 /var/lib/thelve-bootstrap
-printf 'schema=thelve.single-node-cloud-bootstrap/v1\nprovider=gcp\nsecret_values_recorded=false\n' > "$receipt"
+printf 'schema=thelve.single-node-cloud-bootstrap/v2\nprovider=gcp\nsecret_values_recorded=false\n' > "$receipt"
 chmod 0640 "$receipt"
