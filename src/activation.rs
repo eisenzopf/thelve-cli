@@ -594,7 +594,10 @@ if sudo systemctl is-active --quiet thelve.service; then
   current_release_leaf="${{current_release#/opt/thelve/releases/}}"
   case "$current_release_leaf" in ''|*/*) false ;; esac
   sudo test -d "$current_release"
-  sudo_node "$stage/thelve-node" verify --bundle "$current_release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/existing-verify.json"
+  sudo test -f /opt/thelve/bin/thelve-node
+  sudo test ! -L /opt/thelve/bin/thelve-node
+  test "$(sudo stat -c '%U:%G:%a' /opt/thelve/bin/thelve-node)" = root:root:555
+  sudo_node /opt/thelve/bin/thelve-node verify --bundle "$current_release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/existing-verify.json"
   current_unit_path="$(sudo jq -er '.spec.artifacts | map(select(.kind == "systemd_unit")) | if length == 1 then .[0].path else error("systemd unit cardinality") end' "$current_release/bundle/deployment.release.json")"
   case "$current_unit_path" in /*|../*|*/../*|*/..) false ;; esac
   sudo cmp --silent -- /etc/systemd/system/thelve.service "$current_release/bundle/$current_unit_path"
@@ -966,7 +969,13 @@ mod tests {
         assert!(command.contains("activation_stage=activation-preflight"));
         assert!(command.contains("activation_stage=verify-managed-service"));
         assert!(command.contains("systemctl show thelve.service --property=FragmentPath"));
-        assert!(command.contains("verify --bundle \"$current_release/bundle\""));
+        assert!(command.contains("stat -c '%U:%G:%a' /opt/thelve/bin/thelve-node"));
+        assert!(command.contains(
+            "sudo_node /opt/thelve/bin/thelve-node verify --bundle \"$current_release/bundle\""
+        ));
+        assert!(!command.contains(
+            "sudo_node \"$stage/thelve-node\" verify --bundle \"$current_release/bundle\""
+        ));
         assert!(command.contains("current_release_leaf="));
         assert!(command.contains("current_unit_path="));
         assert!(command.contains("cmp --silent -- /etc/systemd/system/thelve.service"));

@@ -63,8 +63,13 @@ corrected-release browser proof, AWS parity, and the Telnyx workflow remain** ·
 - Activation is safely resumable only when the CLI first reverifies the active
   installed bundle against staged trust, verifies the exact root-owned signed
   systemd unit bytes, and proves the listeners belong to that installation.
-  Foreign listeners still fail closed. Receipts distinguish fresh start from
-  a verified service restart without mixing lifecycle JSON into their output.
+  The incoming verifier validates every incoming byte, while the exact
+  root-owned installed verifier validates the active bundle under the contract
+  version that installed it. This preserves fail-closed verification across a
+  forward contract change instead of asking a newer verifier to reinterpret an
+  older valid release. Foreign listeners still fail closed. Receipts distinguish
+  fresh start from a verified service restart without mixing lifecycle JSON into
+  their output.
 - Live GCP preview evidence: signed release `0.1.0-preview.15` was fetched and
   reverified against an independently pinned trust-root digest, rendered, and
   activated on qualified image
