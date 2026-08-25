@@ -366,23 +366,7 @@ pub fn activate_gcp(
         let output = process::capture_named(&ssh_base(remote_command), "remote GCP activation")?;
         let mut receipt: Value =
             serde_json::from_str(&output).context("remote activation receipt is not JSON")?;
-        if receipt.get("schemaVersion").and_then(Value::as_str)
-            != Some("thelve.gcp-activation-receipt/v1")
-            || receipt.get("secretValuesRecorded").and_then(Value::as_bool) != Some(false)
-            || receipt.pointer("/readiness/ready").and_then(Value::as_bool) != Some(true)
-            || receipt
-                .pointer("/registryAccess/host")
-                .and_then(Value::as_str)
-                != Some(registry.host.as_str())
-            || receipt
-                .pointer("/registryAccess/credentialHelper")
-                .and_then(Value::as_str)
-                != Some("docker-credential-gcr")
-            || receipt
-                .pointer("/registryAccess/accessTokenPersisted")
-                .and_then(Value::as_bool)
-                != Some(false)
-        {
+        if !valid_gcp_activation_receipt(&receipt, &registry.host) {
             bail!("remote activation did not return a ready, redacted receipt");
         }
         let registry_access = receipt
@@ -408,6 +392,36 @@ pub fn activate_gcp(
         "set -eu; case {remote_stage} in /tmp/thelve-activation-*) rm -rf -- {remote_stage} ;; *) exit 1 ;; esac"
     )));
     result
+}
+
+fn valid_gcp_activation_receipt(receipt: &Value, registry_host: &str) -> bool {
+    receipt.get("schemaVersion").and_then(Value::as_str) == Some("thelve.gcp-activation-receipt/v1")
+        && receipt.get("secretValuesRecorded").and_then(Value::as_bool) == Some(false)
+        && receipt.pointer("/readiness/status").and_then(Value::as_str) == Some("ready")
+        && receipt
+            .pointer("/readiness/blockers")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        && receipt
+            .pointer("/readiness/ingress_configured")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && receipt
+            .pointer("/readiness/draining")
+            .and_then(Value::as_bool)
+            == Some(false)
+        && receipt
+            .pointer("/registryAccess/host")
+            .and_then(Value::as_str)
+            == Some(registry_host)
+        && receipt
+            .pointer("/registryAccess/credentialHelper")
+            .and_then(Value::as_str)
+            == Some("docker-credential-gcr")
+        && receipt
+            .pointer("/registryAccess/accessTokenPersisted")
+            .and_then(Value::as_bool)
+            == Some(false)
 }
 
 fn wait_for_gcp_ssh(instance: &str, project_id: &str, zone: &str) -> Result<()> {
@@ -795,6 +809,67 @@ fn valid_fqdn(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ready_activation_receipt() -> Value {
+        json!({
+            "schemaVersion": "thelve.gcp-activation-receipt/v1",
+            "readiness": {
+                "status": "ready",
+                "blockers": [],
+                "draining": false,
+                "ingress_configured": true,
+                "active_connections": 0,
+                "max_active_connections": 100,
+                "service": "thelve-realtime-gateway"
+            },
+            "registryAccess": {
+                "host": "us-west1-docker.pkg.dev",
+                "credentialHelper": "docker-credential-gcr",
+                "accessTokenPersisted": false
+            },
+            "secretValuesRecorded": false
+        })
+    }
+
+    #[test]
+    fn activation_receipt_requires_the_current_ready_gateway_contract() {
+        let receipt = ready_activation_receipt();
+        assert!(valid_gcp_activation_receipt(
+            &receipt,
+            "us-west1-docker.pkg.dev"
+        ));
+
+        for pointer in [
+            "/readiness/status",
+            "/readiness/blockers",
+            "/readiness/draining",
+            "/readiness/ingress_configured",
+            "/registryAccess/accessTokenPersisted",
+            "/secretValuesRecorded",
+        ] {
+            let mut invalid = receipt.clone();
+            *invalid.pointer_mut(pointer).unwrap() = Value::Null;
+            assert!(!valid_gcp_activation_receipt(
+                &invalid,
+                "us-west1-docker.pkg.dev"
+            ));
+        }
+
+        let legacy = json!({
+            "schemaVersion": "thelve.gcp-activation-receipt/v1",
+            "readiness": {"ready": true},
+            "registryAccess": {
+                "host": "us-west1-docker.pkg.dev",
+                "credentialHelper": "docker-credential-gcr",
+                "accessTokenPersisted": false
+            },
+            "secretValuesRecorded": false
+        });
+        assert!(!valid_gcp_activation_receipt(
+            &legacy,
+            "us-west1-docker.pkg.dev"
+        ));
+    }
 
     #[test]
     fn remote_command_carries_only_fixed_paths_ids_and_hashes() {
