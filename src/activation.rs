@@ -74,10 +74,15 @@ pub fn render_node_config(
         .get("observability")
         .cloned()
         .context("Terraform node fragment is missing observability")?;
-    let secret_bindings = fragment
+    let mut secret_bindings = fragment
         .get("secretBindings")
         .cloned()
         .context("Terraform node fragment is missing secret bindings")?;
+    let pinned_secret_count = pin_latest_gcp_secret_versions(
+        &mut secret_bindings,
+        &intent.spec.provider,
+        &intent.spec.secret_names,
+    )?;
     let document = json!({
         "apiVersion": "thelve.io/v1alpha1",
         "kind": "SingleNode",
@@ -112,10 +117,103 @@ pub fn render_node_config(
     }
     create_private(output, bytes.as_bytes())?;
     println!(
-        "wrote value-free node activation configuration to {}",
-        output.display()
+        "wrote value-free node activation configuration to {}; pinned {pinned_secret_count} enabled GCP secret versions",
+        output.display(),
     );
     Ok(())
+}
+
+fn pin_latest_gcp_secret_versions(
+    bindings: &mut Value,
+    provider: &Provider,
+    expected_names: &[String],
+) -> Result<usize> {
+    let Provider::Gcp { project_id, .. } = provider else {
+        bail!("preview node configuration currently requires a GCP provider");
+    };
+    pin_gcp_secret_versions_with(bindings, project_id, expected_names, |secret_id| {
+        let output = process::capture_named(
+            &CommandPlan::new("gcloud").args([
+                "secrets",
+                "versions",
+                "list",
+                secret_id,
+                "--project",
+                project_id,
+                "--filter=state=ENABLED",
+                "--sort-by=~name",
+                "--limit=1",
+                "--format=value(name)",
+            ]),
+            "resolve enabled GCP secret version",
+        )?;
+        parse_gcp_secret_version(&output)
+    })
+}
+
+fn pin_gcp_secret_versions_with<F>(
+    bindings: &mut Value,
+    project_id: &str,
+    expected_names: &[String],
+    mut resolve: F,
+) -> Result<usize>
+where
+    F: FnMut(&str) -> Result<String>,
+{
+    let items = bindings
+        .as_array_mut()
+        .context("Terraform secret bindings output is not an array")?;
+    let expected = expected_names
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut actual = std::collections::BTreeSet::new();
+    for binding in items.iter_mut() {
+        let id = binding
+            .get("id")
+            .and_then(Value::as_str)
+            .context("Terraform secret binding has no ID")?;
+        if !actual.insert(id.to_owned()) {
+            bail!("Terraform secret bindings contain a duplicate ID");
+        }
+        let source = binding
+            .get_mut("source")
+            .and_then(Value::as_object_mut)
+            .context("Terraform secret binding has no source")?;
+        if source.get("provider").and_then(Value::as_str) != Some("gcp_secret_manager")
+            || source.get("projectId").and_then(Value::as_str) != Some(project_id)
+        {
+            bail!("Terraform secret binding is outside the exact GCP project");
+        }
+        let secret_id = source
+            .get("secretId")
+            .and_then(Value::as_str)
+            .context("Terraform secret binding has no secret ID")?
+            .to_owned();
+        let version = resolve(&secret_id)?;
+        source.insert("version".into(), version.into());
+    }
+    if actual
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>()
+        != expected
+    {
+        bail!("Terraform secret bindings do not match the deployment intent");
+    }
+    Ok(items.len())
+}
+
+fn parse_gcp_secret_version(output: &str) -> Result<String> {
+    let version = output.trim();
+    if version.is_empty()
+        || version.len() > 20
+        || version == "0"
+        || !version.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        bail!("GCP secret has no valid enabled numeric version");
+    }
+    Ok(version.to_owned())
 }
 
 pub fn activate_gcp(
@@ -689,6 +787,64 @@ mod tests {
         assert!(valid_fqdn("app.example.com"));
         assert!(!valid_fqdn("localhost"));
         assert!(!valid_email("not-an-email"));
+    }
+
+    #[test]
+    fn node_config_pins_exact_enabled_gcp_secret_versions() {
+        let mut bindings = json!([
+            {
+                "id": "database-url",
+                "source": {
+                    "provider": "gcp_secret_manager",
+                    "projectId": "thelve-preview-123456",
+                    "secretId": "thelve-database-url",
+                    "version": "1"
+                }
+            },
+            {
+                "id": "realtime-callback-database-url",
+                "source": {
+                    "provider": "gcp_secret_manager",
+                    "projectId": "thelve-preview-123456",
+                    "secretId": "thelve-realtime-callback-database-url",
+                    "version": "1"
+                }
+            }
+        ]);
+        let expected = vec![
+            "database-url".to_owned(),
+            "realtime-callback-database-url".to_owned(),
+        ];
+        let count = pin_gcp_secret_versions_with(
+            &mut bindings,
+            "thelve-preview-123456",
+            &expected,
+            |secret_id| {
+                Ok(if secret_id == "thelve-database-url" {
+                    "2".into()
+                } else {
+                    "7".into()
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(
+            bindings
+                .pointer("/0/source/version")
+                .and_then(Value::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            bindings
+                .pointer("/1/source/version")
+                .and_then(Value::as_str),
+            Some("7")
+        );
+        assert_eq!(parse_gcp_secret_version("42\n").unwrap(), "42");
+        for invalid in ["", "0", "latest", "-1"] {
+            assert!(parse_gcp_secret_version(invalid).is_err());
+        }
     }
 
     #[test]

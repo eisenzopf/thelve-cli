@@ -167,19 +167,26 @@ fn generated_internal_values(
         bail!("backup destination output is invalid");
     }
     let postgres_password = random_token();
-    let database_url = format!(
+    let bridge_database_url = format!(
         "postgres://postgres:{}@postgres:5432/postgres",
         postgres_password.as_str()
     );
+    let realtime_database_url = format!(
+        "postgres://postgres:{}@127.0.0.1:5432/postgres",
+        postgres_password.as_str()
+    );
     Ok(BTreeMap::from([
-        ("database-url".into(), Zeroizing::new(database_url.clone())),
+        (
+            "database-url".into(),
+            Zeroizing::new(bridge_database_url.clone()),
+        ),
         (
             "migration-database-url".into(),
-            Zeroizing::new(database_url.clone()),
+            Zeroizing::new(bridge_database_url),
         ),
         (
             "realtime-callback-database-url".into(),
-            Zeroizing::new(database_url),
+            Zeroizing::new(realtime_database_url),
         ),
         ("realtime-internal-token".into(), random_token()),
         ("control-api-service-token".into(), random_token()),
@@ -349,13 +356,14 @@ mod tests {
         assert!(!values.contains_key("telnyx-api-key"));
         assert!(!values.contains_key("telnyx-public-key"));
         let password = values.get("postgres-password").unwrap();
-        for name in [
-            "database-url",
-            "migration-database-url",
-            "realtime-callback-database-url",
-        ] {
+        for name in ["database-url", "migration-database-url"] {
             assert!(values.get(name).unwrap().contains(password.as_str()));
+            assert!(values.get(name).unwrap().contains("@postgres:5432/"));
         }
+        let realtime = values.get("realtime-callback-database-url").unwrap();
+        assert!(realtime.contains(password.as_str()));
+        assert!(realtime.contains("@127.0.0.1:5432/"));
+        assert!(!realtime.contains("@postgres:5432/"));
     }
 
     #[test]
