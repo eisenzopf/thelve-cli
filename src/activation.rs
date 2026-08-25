@@ -397,6 +397,34 @@ pub fn activate_gcp(
 fn valid_gcp_activation_receipt(receipt: &Value, registry_host: &str) -> bool {
     receipt.get("schemaVersion").and_then(Value::as_str) == Some("thelve.gcp-activation-receipt/v1")
         && receipt.get("secretValuesRecorded").and_then(Value::as_bool) == Some(false)
+        && receipt
+            .pointer("/serviceAction/schemaVersion")
+            .and_then(Value::as_str)
+            == Some("thelve.single-node-service-action/v1")
+        && receipt
+            .pointer("/serviceAction/service")
+            .and_then(Value::as_str)
+            == Some("thelve.service")
+        && receipt
+            .pointer("/serviceAction/status")
+            .and_then(Value::as_str)
+            == Some("active")
+        && receipt
+            .pointer("/serviceAction/action")
+            .and_then(Value::as_str)
+            .is_some_and(|action| matches!(action, "start" | "restart"))
+        && receipt
+            .pointer("/serviceAction/completedAt")
+            .and_then(Value::as_str)
+            .is_some_and(|completed_at| !completed_at.is_empty())
+        && receipt
+            .pointer("/serviceAction/priorManagedServiceStopped")
+            .and_then(Value::as_bool)
+            .is_some()
+        && receipt
+            .pointer("/serviceAction/secretValuesRecorded")
+            .and_then(Value::as_bool)
+            == Some(false)
         && receipt.pointer("/readiness/status").and_then(Value::as_str) == Some("ready")
         && receipt
             .pointer("/readiness/blockers")
@@ -552,6 +580,25 @@ mkdir "$stage/release"
 tar --no-same-owner --no-same-permissions -xzf "$stage/bundle.tar.gz" -C "$stage/release"
 activation_stage=verify-release
 sudo_node "$stage/thelve-node" verify --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/verify.json"
+managed_service_stopped=false
+if sudo systemctl is-active --quiet thelve.service; then
+  activation_stage=verify-managed-service
+  test "$(sudo systemctl show thelve.service --property=FragmentPath --value)" = /etc/systemd/system/thelve.service
+  test "$(sudo stat -c '%U:%G:%a' /etc/systemd/system/thelve.service)" = root:root:644
+  sudo test -L /opt/thelve/current
+  current_release="$(sudo readlink -f -- /opt/thelve/current)"
+  case "$current_release" in /opt/thelve/releases/*) ;; *) false ;; esac
+  current_release_leaf="${{current_release#/opt/thelve/releases/}}"
+  case "$current_release_leaf" in ''|*/*) false ;; esac
+  sudo test -d "$current_release"
+  sudo_node "$stage/thelve-node" verify --bundle "$current_release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/existing-verify.json"
+  current_unit_path="$(sudo jq -er '.spec.artifacts | map(select(.kind == "systemd_unit")) | if length == 1 then .[0].path else error("systemd unit cardinality") end' "$current_release/bundle/deployment.release.json")"
+  case "$current_unit_path" in /*|../*|*/../*|*/..) false ;; esac
+  sudo cmp --silent -- /etc/systemd/system/thelve.service "$current_release/bundle/$current_unit_path"
+  activation_stage=stop-managed-service
+  sudo_node "$stage/thelve-node" stop > "$stage/stop.json"
+  managed_service_stopped=true
+fi
 activation_stage=activation-preflight
 preflight_attempt=1
 while [ "$preflight_attempt" -le {preflight_attempts} ]; do
@@ -579,7 +626,9 @@ test "$(sudo stat -c '%U:%G:%a' /etc/thelve/docker/config.json)" = root:root:600
 activation_stage=materialize-secrets
 sudo_node /opt/thelve/bin/thelve-node activate-secrets --config /etc/thelve/node.yaml > "$stage/secrets.json"
 activation_stage=start-services
-sudo_node /opt/thelve/bin/thelve-node start > "$stage/start.json"
+sudo_node /opt/thelve/bin/thelve-node start > "$stage/start-command.json"
+sudo systemctl is-active --quiet thelve.service
+jq -n --argjson priorManagedServiceStopped "$managed_service_stopped" --slurpfile command "$stage/start-command.json" '{{schemaVersion:"thelve.single-node-service-action/v1",service:"thelve.service",action:(if $priorManagedServiceStopped then "restart" else "start" end),status:"active",priorManagedServiceStopped:$priorManagedServiceStopped,completedAt:$command[0].completedAt,secretValuesRecorded:false}}' > "$stage/start.json"
 activation_stage=verify-readiness
 sudo_node /opt/thelve/bin/thelve-node readiness > "$stage/readiness.json"
 activation_stage=render-receipt
@@ -813,6 +862,15 @@ mod tests {
     fn ready_activation_receipt() -> Value {
         json!({
             "schemaVersion": "thelve.gcp-activation-receipt/v1",
+            "serviceAction": {
+                "schemaVersion": "thelve.single-node-service-action/v1",
+                "service": "thelve.service",
+                "action": "restart",
+                "status": "active",
+                "priorManagedServiceStopped": true,
+                "completedAt": "2026-08-25T10:50:28Z",
+                "secretValuesRecorded": false
+            },
             "readiness": {
                 "status": "ready",
                 "blockers": [],
@@ -844,6 +902,11 @@ mod tests {
             "/readiness/blockers",
             "/readiness/draining",
             "/readiness/ingress_configured",
+            "/serviceAction/status",
+            "/serviceAction/action",
+            "/serviceAction/completedAt",
+            "/serviceAction/priorManagedServiceStopped",
+            "/serviceAction/secretValuesRecorded",
             "/registryAccess/accessTokenPersisted",
             "/secretValuesRecorded",
         ] {
@@ -894,12 +957,21 @@ mod tests {
         assert!(command.contains("sudo_node()"));
         assert!(!command.contains("sudo \"$stage/thelve-node\" preflight"));
         assert!(command.contains("activation_stage=activation-preflight"));
+        assert!(command.contains("activation_stage=verify-managed-service"));
+        assert!(command.contains("systemctl show thelve.service --property=FragmentPath"));
+        assert!(command.contains("verify --bundle \"$current_release/bundle\""));
+        assert!(command.contains("current_release_leaf="));
+        assert!(command.contains("current_unit_path="));
+        assert!(command.contains("cmp --silent -- /etc/systemd/system/thelve.service"));
+        assert!(command.contains("activation_stage=stop-managed-service"));
+        assert!(command.contains("sudo_node \"$stage/thelve-node\" stop"));
         assert!(command.contains("preflight_attempt=1"));
         assert!(command.contains("while [ \"$preflight_attempt\" -le 24 ]"));
         assert!(command.contains("sleep 5"));
         assert!(command.contains("schemaVersion,activation,activationAllowed,checks"));
         assert!(command.contains("$stage/preflight.stderr"));
         assert!(command.contains("activation_stage=start-services"));
+        assert!(command.contains("priorManagedServiceStopped"));
         assert!(command.contains("Thelve activation failed at stage"));
         assert!(command.contains("secretValuesRecorded:false"));
         assert!(!command.contains("api-key"));
