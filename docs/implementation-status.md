@@ -1,8 +1,9 @@
 # Thelve CLI implementation status
 
 Overall status: **Partial — the public hosted CLI repository and its verification
-workflow are live; signed binary publication, application activation, and the
-Telnyx workflow remain** · Updated 2026-08-24
+workflow are live and the CLI has produced a successful redacted activation
+receipt for signed Thelve preview 15 on its GCP node; signed binary publication,
+corrected-release browser proof, AWS parity, and the Telnyx workflow remain** · Updated 2026-08-25
 
 ## Implemented
 
@@ -55,11 +56,21 @@ Telnyx workflow remain** · Updated 2026-08-24
   materialization, exact-repository Artifact Registry reader IAM, standalone
   GCE credential-helper configuration with no persisted access token, systemd
   start, readiness assertion, and redacted receipt.
-- Live GCP preview evidence: signed release `0.1.0-preview.2` was fetched and
-  reverified against an independently pinned trust-root digest; the prepared
-  deployment was then reconciled onto qualified image
-  `thelve-host-0-1-0-preview-4-20260824-2a383b6`, preserving the static IP and
-  external state while leaving the host stopped.
+- Activation is safely resumable only when the CLI first reverifies the active
+  installed bundle against staged trust, verifies the exact root-owned signed
+  systemd unit bytes, and proves the listeners belong to that installation.
+  Foreign listeners still fail closed. Receipts distinguish fresh start from
+  a verified service restart without mixing lifecycle JSON into their output.
+- Live GCP preview evidence: signed release `0.1.0-preview.15` was fetched and
+  reverified against an independently pinned trust-root digest, rendered, and
+  activated on qualified image
+  `thelve-host-0-1-0-preview-5-20260825-028cdb5`, preserving static IP
+  `34.168.66.188` and the restricted SIP/RTP/browser perimeter. All 14 pinned
+  secrets were materialized without values entering the receipt; all six
+  services became healthy, the gateway reported ready, trusted public TLS and
+  API health/readiness passed, and the redacted activation receipt recorded an
+  active service. The CLI then paused the VM for cost control while the product
+  web/bridge corrections are signed.
 - Activation and remote qualification preserve the required open-file limit
   across privilege elevation by setting it inside the audited root shell; this
   was discovered and fixed during the first real image qualification.
@@ -106,9 +117,8 @@ Telnyx workflow remain** · Updated 2026-08-24
 - Verify channel-to-release linkage, freshness/rollback state, catalog
   revocation, CLI-version compatibility, and provider/region image selection as
   a single transaction.
-- Run the implemented GCP application-activation path against the already
-  qualified/prepared host and retain its first real receipt; implement
-  equivalent AWS SSM transport and activation.
+- Reactivate the corrected signed GCP release and retain browser/WebRTC/call
+  evidence; implement equivalent AWS SSM transport and activation.
 - Add release list/select, logs, readiness, backup/restore, upgrade/rollback,
   support bundle, capacity change, and governed inbound-test commands.
 - Run clean-workstation GCP and AWS apply/security/recovery/cleanup receipts.
