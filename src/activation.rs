@@ -301,7 +301,7 @@ pub fn activate_gcp(
     let stage_name = format!("thelve-activation-{operation_id}");
     let remote_stage = format!("/tmp/{stage_name}");
     let target = format!("{instance}:{remote_stage}/");
-    let ssh_base = |command: String| gcp_ssh_plan(instance, project_id, zone, command);
+    let ssh_base = |command: String| gcp_activation_ssh_plan(instance, project_id, zone, command);
     process::inherit(&ssh_base(format!(
         "set -eu; umask 077; test ! -e {remote_stage}; mkdir {remote_stage}"
     )))?;
@@ -316,6 +316,8 @@ pub fn activate_gcp(
             zone.clone(),
             "--tunnel-through-iap".into(),
             "--quiet".into(),
+            "--scp-flag=-oConnectTimeout=15".into(),
+            "--scp-flag=-oConnectionAttempts=3".into(),
         ]);
         for (_, name) in &files {
             scp = scp.arg(local_stage.path().join(name).display().to_string());
@@ -446,6 +448,32 @@ fn gcp_ssh_plan(
         "--ssh-flag=-oBatchMode=yes".into(),
         "--ssh-flag=-oConnectTimeout=5".into(),
         "--ssh-flag=-oConnectionAttempts=1".into(),
+        "--command".into(),
+        command.into(),
+    ])
+}
+
+fn gcp_activation_ssh_plan(
+    instance: &str,
+    project_id: &str,
+    zone: &str,
+    command: impl Into<String>,
+) -> CommandPlan {
+    CommandPlan::new("gcloud").args([
+        "compute".into(),
+        "ssh".into(),
+        instance.into(),
+        "--project".into(),
+        project_id.into(),
+        "--zone".into(),
+        zone.into(),
+        "--tunnel-through-iap".into(),
+        "--quiet".into(),
+        "--ssh-flag=-oBatchMode=yes".into(),
+        "--ssh-flag=-oConnectTimeout=15".into(),
+        "--ssh-flag=-oConnectionAttempts=3".into(),
+        "--ssh-flag=-oServerAliveInterval=15".into(),
+        "--ssh-flag=-oServerAliveCountMax=20".into(),
         "--command".into(),
         command.into(),
     ])
@@ -933,6 +961,32 @@ mod tests {
         assert!(
             plan.args
                 .contains(&"--ssh-flag=-oConnectionAttempts=1".into())
+        );
+        assert_eq!(plan.args.last().map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn gcp_activation_ssh_tolerates_iap_banner_delay_and_keeps_the_session_live() {
+        let plan = gcp_activation_ssh_plan(
+            "thelve-preview-test",
+            "thelve-preview-123456",
+            "us-west1-b",
+            "true",
+        );
+        assert!(plan.args.contains(&"--tunnel-through-iap".into()));
+        assert!(plan.args.contains(&"--ssh-flag=-oBatchMode=yes".into()));
+        assert!(plan.args.contains(&"--ssh-flag=-oConnectTimeout=15".into()));
+        assert!(
+            plan.args
+                .contains(&"--ssh-flag=-oConnectionAttempts=3".into())
+        );
+        assert!(
+            plan.args
+                .contains(&"--ssh-flag=-oServerAliveInterval=15".into())
+        );
+        assert!(
+            plan.args
+                .contains(&"--ssh-flag=-oServerAliveCountMax=20".into())
         );
         assert_eq!(plan.args.last().map(String::as_str), Some("true"));
     }
