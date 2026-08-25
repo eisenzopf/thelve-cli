@@ -26,6 +26,8 @@ const MAX_NODE_CONFIG_BYTES: u64 = 1024 * 1024;
 const ARTIFACT_REGISTRY_READER_ROLE: &str = "roles/artifactregistry.reader";
 const GCP_SSH_READY_ATTEMPTS: u8 = 24;
 const GCP_SSH_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
+const GCP_ACTIVATION_PREFLIGHT_ATTEMPTS: u8 = 24;
+const GCP_ACTIVATION_PREFLIGHT_RETRY_SECONDS: u8 = 5;
 
 #[derive(Debug, Eq, PartialEq)]
 struct GcpRegistryTarget {
@@ -476,6 +478,8 @@ fn remote_activation_command(
     config_sha: &str,
     registry_host: &str,
 ) -> String {
+    let preflight_attempts = GCP_ACTIVATION_PREFLIGHT_ATTEMPTS;
+    let preflight_retry_seconds = GCP_ACTIVATION_PREFLIGHT_RETRY_SECONDS;
     format!(
         r#"set -Eeuo pipefail
 umask 077
@@ -507,7 +511,19 @@ tar --no-same-owner --no-same-permissions -xzf "$stage/bundle.tar.gz" -C "$stage
 activation_stage=verify-release
 sudo_node "$stage/thelve-node" verify --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/verify.json"
 activation_stage=activation-preflight
-sudo_node "$stage/thelve-node" preflight --activation --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/preflight.json"
+preflight_attempt=1
+while [ "$preflight_attempt" -le {preflight_attempts} ]; do
+  if sudo_node "$stage/thelve-node" preflight --activation --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/preflight.json" 2> "$stage/preflight.stderr"; then
+    break
+  fi
+  if [ "$preflight_attempt" -eq {preflight_attempts} ]; then
+    jq -c '{{schemaVersion,activation,activationAllowed,checks,secretValuesRecorded}}' "$stage/preflight.json" >&2 || true
+    tail -n 5 "$stage/preflight.stderr" >&2 || true
+    false
+  fi
+  preflight_attempt=$((preflight_attempt + 1))
+  sleep {preflight_retry_seconds}
+done
 activation_stage=install-release
 sudo_node "$stage/thelve-node" install --config "$stage/node.yaml" --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" --operation-id {operation_id} > "$stage/install.json"
 activation_stage=configure-registry
@@ -775,6 +791,11 @@ mod tests {
         assert!(command.contains("sudo_node()"));
         assert!(!command.contains("sudo \"$stage/thelve-node\" preflight"));
         assert!(command.contains("activation_stage=activation-preflight"));
+        assert!(command.contains("preflight_attempt=1"));
+        assert!(command.contains("while [ \"$preflight_attempt\" -le 24 ]"));
+        assert!(command.contains("sleep 5"));
+        assert!(command.contains("schemaVersion,activation,activationAllowed,checks"));
+        assert!(command.contains("$stage/preflight.stderr"));
         assert!(command.contains("activation_stage=start-services"));
         assert!(command.contains("Thelve activation failed at stage"));
         assert!(command.contains("secretValuesRecorded:false"));
