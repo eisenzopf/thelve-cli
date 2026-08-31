@@ -1,7 +1,7 @@
 # Thelve CLI implementation status
 
 Overall status: **Partial — provider-neutral outbound and GCP recovery contracts
-are implemented and signed CLI `v0.1.3` is public, while clean-node restore and
+are implemented and signed CLI `v0.1.4` is public, while clean-node restore and
 live outbound acceptance remain** · Updated 2026-08-31
 
 ## Implemented
@@ -44,6 +44,10 @@ live outbound acceptance remain** · Updated 2026-08-31
 - GCP backup creation and verification invoke the signed node's bounded backup
   tools over IAP, accept only value-free contract receipts, and preserve
   encrypted/versioned backup objects in the deployment's private GCS bucket.
+- `backup restore` independently re-verifies the signed target release and
+  immutable recovery point, accepts only the current ready gateway receipt,
+  writes a private value-free receipt, and stops the application again if
+  execution or receipt validation fails.
 - `deploy replace-node` verifies the target signed release and retained backup,
   applies a saved Terraform plan containing only an exact GCE instance
   replacement, proves changed instance and boot-disk identities, proves the
@@ -81,6 +85,10 @@ live outbound acceptance remain** · Updated 2026-08-31
   older valid release. Foreign listeners still fail closed. Receipts distinguish
   fresh start from a verified service restart without mixing lifecycle JSON into
   their output.
+- First-boot activation retries only the idempotent remote-stage preparation
+  and artifact-transfer steps across six bounded IAP/SSH attempts. Reused
+  staging directories must be owned by the OS Login caller and mode `0700`;
+  activation never silently resets or replaces a node.
 - Live GCP preview evidence: signed release `0.1.0-preview.15` was fetched and
   reverified against an independently pinned trust-root digest, rendered, and
   activated on qualified image
@@ -96,7 +104,7 @@ live outbound acceptance remain** · Updated 2026-08-31
   was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
-- All 43 CLI tests pass with outbound-capacity, SIP-egress-secret, exact
+- All 44 CLI tests pass with outbound-capacity, SIP-egress-secret, exact
   replacement coverage; final strict Clippy and release-workflow validation
   are rerun before publication.
 - Public repository `https://github.com/eisenzopf/thelve-cli` hosts `main`; its
@@ -116,13 +124,14 @@ live outbound acceptance remain** · Updated 2026-08-31
   Terraform and GitHub Actions updates.
 - The `cli-release` GitHub environment requires explicit owner review and a
   protected branch; tagged binary publication is bound to that environment.
-- Public release `v0.1.3` is bound to commit `c25d89f`. Hosted run
-  `33420780646` passed all Linux, Intel macOS, and Apple Silicon build, test,
+- Public release `v0.1.4` is bound to commit
+  `6079091e5a2a6ac86cfe820f92a3d91542713031`. Hosted run `33434224995`
+  passed all Linux, Intel macOS, and Apple Silicon build, test,
   keyless-signing, provenance, and publication jobs. The independently checked
   Linux binary digest used by GCP qualification is
-  `sha256:32a7130bc2b365d0efe2e429bc94a64e5d60278dc3575dbcf4d192946059d00b`;
+  `sha256:6c59c2cb7eca916dfd78f275241f5f629f53850d246904da22b4cc6d882fc8ae`;
   the installed Apple Silicon rehearsal binary is independently attested at
-  `sha256:e16f3e1d2371253e302fd6ce2947c60719870c331b5810cd785a6586dbb7a3f5`.
+  `sha256:78b9552821e429ec845c684ec7dccbdb7add27ba09392abc5ee81107bfbc7f23`.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC
   9421-style signed envelopes, live capability discovery, guarded reads,
   exact-payload configuration plans, approved-plan verification, and apply.
