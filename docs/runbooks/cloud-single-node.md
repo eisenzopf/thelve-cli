@@ -1,8 +1,9 @@
 # Cloud single-node operator runbook
 
 Status: local CLI implementation available, including live-validated private
-GCP preview retrieval and prepare-only reconciliation onto an independently
-qualified image; application activation and live Telnyx receipts remain open.
+GCP preview retrieval, signed activation, provider-neutral outbound capacity,
+encrypted GCS backup, and exact GCE node replacement. Publication and a clean
+replacement/live outbound receipt remain open.
 `deploy up` starts the host, while
 `deploy activate-gcp` is the separate application-readiness boundary.
 Activation grants the deployment's exact runtime service account read access
@@ -106,6 +107,33 @@ of every secret, and records those immutable version pins without reading any
 secret value. A later activation therefore adopts an intentional rotation but
 cannot silently follow a mutable alias.
 
+Internal initialization also creates the SIP egress root used only by the
+backend to derive tenant-scoped carrier credentials. The root and derived
+credentials never enter deployment intent, Terraform state, receipts, logs,
+or CLI arguments. Set the three call limits to two inbound, two outbound, and
+two total for the spend-capped test deployment; raise them only after carrier,
+gateway, and host capacity review.
+
+Before replacing a GCP node, fetch and verify the exact target release, resume
+the current node, and create a consistent encrypted backup:
+
+```sh
+thelve backup create --config deployment.yaml --release-dir verified-preview \
+  --output backup-receipt.json --approve
+thelve backup verify --config deployment.yaml --backup-id BACKUP_UUID
+thelve deploy replace-node --config deployment.yaml \
+  --release-dir verified-preview --backup-id BACKUP_UUID \
+  --receipt replacement-receipt.json --approve --confirm thelve-test
+```
+
+Replacement refuses a Terraform plan containing any resource mutation other
+than replacement of the exact GCE instance. The boot disk auto-deletes; the
+static IP, VPC/subnet, Secret Manager containers and versions, GCS state and
+backup storage, deployment identity, tenant state, DID, and carrier resources
+remain. Restore failure leaves the new application stopped and retains the
+backup. The current recovery transport is deliberately GCP-first; AWS recovery
+must not be inferred from these commands.
+
 The TLS contact email is operational metadata, not a secret, but it must be a
 real operator-selected address for ACME notices. Do not substitute an example
 address in an actual activation. Stop after `prepare` if the contact or either
@@ -133,8 +161,9 @@ thelve deploy init --provider aws --name thelve-test \
 thelve deploy bootstrap-state --config deployment.yaml --approve
 thelve deploy plan --config deployment.yaml
 thelve deploy prepare --config deployment.yaml --approve
+thelve secret initialize-internal --config deployment.yaml --approve
 thelve secret set --config deployment.yaml --name telnyx-api-key
-# Populate every remaining declared secret.
+thelve secret set --config deployment.yaml --name telnyx-public-key
 thelve deploy up --config deployment.yaml --approve
 thelve deploy status --config deployment.yaml
 ```

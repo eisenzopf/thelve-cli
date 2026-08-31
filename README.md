@@ -23,8 +23,11 @@ remote inputs verified by digest and signature.
 - remote-state creation: `thelve deploy bootstrap-state`
 - redacted Terraform plans and explicit prepare/apply/pause/resume/destroy
 - direct hidden-input writes to GCP Secret Manager or AWS Secrets Manager
-- one-shot correlated generation of non-Telnyx GCP runtime secrets without
+- one-shot correlated generation of non-Telnyx GCP or AWS runtime secrets without
   local persistence: `thelve secret initialize-internal`
+- encrypted GCS backup creation/verification and exact GCE node replacement
+  with retained static IP, network, secret containers, backup bucket, and
+  application state
 - value-free node configuration rendering and signed-release activation over
   GCP IAP/OS Login with remote digest checks, exact-repository Artifact Registry
   IAM, metadata-backed registry credentials, and a redacted readiness receipt
@@ -42,6 +45,14 @@ remote inputs verified by digest and signature.
 The application release publication, machine-image catalog publication, and
 live Telnyx acceptance receipts are external release gates and are not faked by
 this repository.
+
+Tagged releases publish compiled-only Linux and macOS binaries, archives,
+SHA-256 files, keyless Sigstore bundles, and GitHub build provenance. The
+direct Linux binary is also the immutable input used by GCP release
+qualification. The intended familiar installation command is
+`brew install thelve`; admission to Homebrew/core is a public-release gate, so
+until that formula is accepted operators install the exact verified GitHub
+Release asset documented with the release.
 
 ## Developer verification
 

@@ -4,7 +4,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
-use crate::{activation, agent, catalog, cloud, config, mcp, preview, secrets, skills, terraform};
+use crate::{
+    activation, agent, catalog, cloud, config, mcp, preview, recovery, secrets, skills, terraform,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "thelve", version, about = "Cloud-only Thelve deployment CLI")]
@@ -22,6 +24,8 @@ enum Command {
     Release(CatalogArgs),
     /// Create and operate a cloud single-node deployment.
     Deploy(DeployArgs),
+    /// Create and verify encrypted single-node recovery points.
+    Backup(BackupArgs),
     /// Populate cloud secret-manager values without Terraform state or argv exposure.
     Secret(SecretArgs),
     /// Configure and use a bounded AAuth client for a deployed Thelve system.
@@ -378,6 +382,49 @@ enum DeployCommand {
         #[arg(long)]
         approve: bool,
     },
+    /// Replace only the GCP VM and boot disk, activate a signed release, and restore a verified backup.
+    ReplaceNode {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        release_dir: PathBuf,
+        #[arg(long)]
+        backup_id: Uuid,
+        #[arg(long, default_value = "replacement-receipt.json")]
+        receipt: PathBuf,
+        #[arg(long)]
+        approve: bool,
+        #[arg(long)]
+        confirm: String,
+    },
+}
+
+#[derive(Debug, Args)]
+struct BackupArgs {
+    #[command(subcommand)]
+    command: BackupCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum BackupCommand {
+    /// Drain writers and create a checksummed, immutable, encrypted recovery point.
+    Create {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        release_dir: PathBuf,
+        #[arg(long, default_value = "backup-receipt.json")]
+        output: PathBuf,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Download and independently verify a recovery point without exposing backup contents.
+    Verify {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        backup_id: Uuid,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -536,6 +583,39 @@ pub fn execute(cli: Cli) -> Result<()> {
             } => {
                 require_approval(approve, "activate-gcp")?;
                 activation::activate_gcp(&config, &release_dir, &node_config, &receipt)
+            }
+            DeployCommand::ReplaceNode {
+                config,
+                release_dir,
+                backup_id,
+                receipt,
+                approve,
+                confirm,
+            } => {
+                require_approval(approve, "replace-node")?;
+                let intent = config::load(&config)?;
+                if confirm != intent.metadata.name {
+                    bail!(
+                        "--confirm must exactly match deployment name {:?}",
+                        intent.metadata.name
+                    );
+                }
+                recovery::replace_gcp_node(&config, &release_dir, backup_id, &receipt)
+            }
+        },
+        Command::Backup(args) => match args.command {
+            BackupCommand::Create {
+                config,
+                release_dir,
+                output,
+                approve,
+            } => {
+                require_approval(approve, "backup create")?;
+                recovery::create_backup(&config, &release_dir, &output)
+            }
+            BackupCommand::Verify { config, backup_id } => {
+                let value = recovery::verify_backup(&config, backup_id)?;
+                print_json(&value)
             }
         },
         Command::Secret(args) => match args.command {

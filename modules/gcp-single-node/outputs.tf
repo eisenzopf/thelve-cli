@@ -2,8 +2,28 @@ output "public_ip" {
   value = google_compute_address.thelve.address
 }
 
+output "network_id" {
+  value = google_compute_network.thelve.id
+}
+
+output "subnetwork_id" {
+  value = google_compute_subnetwork.thelve.id
+}
+
+output "static_address_id" {
+  value = google_compute_address.thelve.id
+}
+
 output "instance_name" {
   value = google_compute_instance.thelve.name
+}
+
+output "instance_id" {
+  value = google_compute_instance.thelve.instance_id
+}
+
+output "boot_disk_name" {
+  value = google_compute_instance.thelve.boot_disk[0].device_name
 }
 
 output "instance_status" {
@@ -26,6 +46,10 @@ output "runtime_service_account" {
 
 output "backup_bucket" {
   value = var.create_backup_bucket ? google_storage_bucket.backup[0].name : null
+}
+
+output "backup_bucket_id" {
+  value = var.create_backup_bucket ? google_storage_bucket.backup[0].id : null
 }
 
 output "backup_destination_url" {

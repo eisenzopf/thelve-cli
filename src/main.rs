@@ -7,6 +7,7 @@ mod config;
 mod mcp;
 mod preview;
 mod process;
+mod recovery;
 mod secrets;
 mod skills;
 mod terraform;

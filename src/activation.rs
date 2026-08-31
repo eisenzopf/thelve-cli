@@ -95,7 +95,9 @@ pub fn render_node_config(
             "computeProfile": intent.spec.compute_profile,
             "releaseRef": receipt.deployment_release_sha256,
             "capacity": {
-                "maxConcurrentInboundCalls": intent.spec.max_concurrent_inbound_calls
+                "maxConcurrentInboundCalls": intent.spec.max_concurrent_inbound_calls,
+                "maxConcurrentOutboundCalls": intent.spec.max_concurrent_outbound_calls,
+                "maxConcurrentVoiceCalls": intent.spec.max_concurrent_voice_calls
             },
             "domains": domains,
             "networking": networking,
@@ -524,6 +526,35 @@ fn gcp_activation_ssh_plan(
     ])
 }
 
+pub(crate) fn capture_gcp_remote(
+    config_path: &Path,
+    command: impl Into<String>,
+    label: &str,
+) -> Result<String> {
+    let intent = config::load(config_path)?;
+    let Provider::Gcp {
+        project_id, zone, ..
+    } = &intent.spec.provider
+    else {
+        bail!("remote recovery operations currently require a GCP deployment intent");
+    };
+    let outputs = terraform::outputs(config_path, &intent)?;
+    let instance = output_value(&outputs, "instance_name")?
+        .as_str()
+        .context("Terraform instance_name output is not a string")?;
+    let instance_status = output_value(&outputs, "instance_status")?
+        .as_str()
+        .context("Terraform instance_status output is not a string")?;
+    if instance_status != "RUNNING" {
+        bail!("GCP node must be running for {label}");
+    }
+    wait_for_gcp_ssh(instance, project_id, zone)?;
+    process::capture_named(
+        &gcp_activation_ssh_plan(instance, project_id, zone, command),
+        label,
+    )
+}
+
 fn retry_until_ready<F, W>(attempts: u8, delay: Duration, mut probe: F, mut wait: W) -> Result<u8>
 where
     F: FnMut() -> Result<()>,
@@ -780,6 +811,14 @@ fn validate_node_config(
             .and_then(Value::as_u64)
             != Some(u64::from(intent.spec.max_concurrent_inbound_calls))
         || value
+            .pointer("/spec/capacity/maxConcurrentOutboundCalls")
+            .and_then(Value::as_u64)
+            != Some(u64::from(intent.spec.max_concurrent_outbound_calls))
+        || value
+            .pointer("/spec/capacity/maxConcurrentVoiceCalls")
+            .and_then(Value::as_u64)
+            != Some(u64::from(intent.spec.max_concurrent_voice_calls))
+        || value
             .pointer("/spec/networking/advertisedIpv4")
             .and_then(Value::as_str)
             != Some(public_ip)
@@ -1017,7 +1056,11 @@ mod tests {
             "metadata": {"name": "thelve-test"},
             "spec": {
                 "releaseRef": format!("sha256:{}", "a".repeat(64)),
-                "capacity": {"maxConcurrentInboundCalls": 2},
+                "capacity": {
+                    "maxConcurrentInboundCalls": 2,
+                    "maxConcurrentOutboundCalls": 2,
+                    "maxConcurrentVoiceCalls": 2
+                },
                 "networking": {"advertisedIpv4": "203.0.113.10"},
                 "secretBindings": [{"id": "database-url"}]
             }

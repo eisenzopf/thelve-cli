@@ -1,9 +1,8 @@
 # Thelve CLI implementation status
 
-Overall status: **Partial — the public hosted CLI repository and its verification
-workflow are live and the CLI has produced a successful redacted activation
-receipt for signed Thelve preview 15 on its GCP node; signed binary publication,
-corrected-release browser proof, AWS parity, and the Telnyx workflow remain** · Updated 2026-08-25
+Overall status: **Partial — provider-neutral outbound and GCP recovery contracts
+are implemented locally, while signed binary publication, Cloud Build
+qualification, clean-node restore, and live outbound acceptance remain** · Updated 2026-08-30
 
 ## Implemented
 
@@ -13,10 +12,10 @@ corrected-release browser proof, AWS parity, and the Telnyx workflow remain** ·
 - Strict no-secret deployment intent and validation, including compute
   profiles, exact host-image IDs, Telnyx perimeter inputs, DNS, concurrency,
   and the complete runtime-secret inventory.
-- `maxConcurrentInboundCalls` is projected into the value-free SingleNode
-  activation contract and independently revalidated before upload. The
-  product renderer now uses that one value for gateway admission and Telnyx
-  inbound-channel reconciliation, so the CLI setting is no longer advisory.
+- `maxConcurrentInboundCalls`, `maxConcurrentOutboundCalls`, and
+  `maxConcurrentVoiceCalls` are projected into the value-free SingleNode
+  activation contract and independently revalidated before upload. The test
+  defaults are two inbound, two outbound, and two total carrier calls.
 - Dated, CLI-embedded Telnyx US signaling and global media CIDRs for US cloud
   regions; unsupported regions keep fail-closed review sentinels.
 - GCP and AWS carrier perimeters admit RTP plus AnchorSite ICMP probes only
@@ -35,14 +34,22 @@ corrected-release browser proof, AWS parity, and the Telnyx workflow remain** ·
   pause/resume, and exact-name destroy commands with explicit approvals.
 - GCP required-version checks convert Terraform's full secret resource name to
   an exact same-project secret ID before invoking `gcloud`; the live gate now
-  recognizes all 12 generated versions and reports only the two intentionally
-  empty Telnyx inputs.
+  recognizes the declared version inventory without disclosing values.
 - GCP Secret Manager and AWS Secrets Manager writes through hidden input/stdin;
   values never enter CLI argv or Terraform variables/state.
-- Fail-closed GCP internal-secret initialization generates one correlated
+- Fail-closed GCP and AWS internal-secret initialization generates one correlated
   version-1 set for database URLs/password, Redis, internal service tokens,
-  Keycloak, MinIO, OIDC, and backup destination; Telnyx inputs remain separate
-  hidden operator actions.
+  Keycloak, MinIO, OIDC, backup destination, and the SIP egress derivation
+  root; Telnyx API and webhook inputs remain separate hidden operator actions.
+- GCP backup creation and verification invoke the signed node's bounded backup
+  tools over IAP, accept only value-free contract receipts, and preserve
+  encrypted/versioned backup objects in the deployment's private GCS bucket.
+- `deploy replace-node` verifies the target signed release and retained backup,
+  applies a saved Terraform plan containing only an exact GCE instance
+  replacement, proves changed instance and boot-disk identities, proves the
+  static IP/network/runtime identity/secret containers/backup bucket were
+  retained, activates the target release, restores state, and leaves a failed
+  restoration stopped with the backup retained.
 - Optional provider-native log agents are disabled by default and admitted only
   with an immutable HTTPS package URL plus lowercase SHA-256.
 - Independently pinned trust-root digest plus JSON Schema checks for the root
@@ -85,8 +92,9 @@ corrected-release browser proof, AWS parity, and the Telnyx workflow remain** ·
   was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
-- All 39 CLI tests and strict Clippy pass with the exact-capacity activation
-  regression; corrected product publication and live receipt remain pending.
+- All 41 CLI tests pass with outbound-capacity, SIP-egress-secret, and exact
+  replacement coverage; final strict Clippy and release-workflow validation
+  are rerun before publication.
 - Public repository `https://github.com/eisenzopf/thelve-cli` hosts `main`; its
   first standard-runner verification passed every Rust, Terraform and
   no-secret job. Repository defaults are read-only Actions tokens, squash-only
@@ -130,8 +138,10 @@ corrected-release browser proof, AWS parity, and the Telnyx workflow remain** ·
   a single transaction.
 - Reactivate the corrected signed GCP release and retain browser/WebRTC/call
   evidence; implement equivalent AWS SSM transport and activation.
-- Add release list/select, logs, readiness, backup/restore, upgrade/rollback,
-  support bundle, capacity change, and governed inbound-test commands.
+- Execute the implemented GCP backup/restore and exact node-replacement path on
+  the retained preview deployment and preserve its redacted receipts.
+- Add release list/select, logs, upgrade/rollback, support bundle, capacity
+  change, and governed inbound-test commands; add AWS backup/restore parity.
 - Run clean-workstation GCP and AWS apply/security/recovery/cleanup receipts.
 - Complete one spend-capped Telnyx DID-to-queue-to-browser two-way-audio test.
 - Add native OS credential-store or hardware-backed AAuth key options for
@@ -149,9 +159,9 @@ terraform -chdir=modules/aws-single-node init -backend=false
 terraform -chdir=modules/aws-single-node validate
 ```
 
-The CLI is not a public quickstart until the signed-distribution and remote
-activation gates pass. Infrastructure reconciliation alone is not application
-or carrier readiness.
+The CLI is not a public quickstart until the signed-distribution, remote
+qualification, clean restore, and outbound acceptance gates pass.
+Infrastructure reconciliation alone is not application or carrier readiness.
 
 ## Publication posture
 

@@ -53,6 +53,7 @@ pub const REQUIRED_SECRET_NAMES: &[&str] = &[
     "backup/destination",
     "telnyx-api-key",
     "telnyx-public-key",
+    "sip-egress-root",
 ];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
@@ -98,6 +99,8 @@ pub struct Spec {
     #[serde(default)]
     pub domains: BTreeMap<String, String>,
     pub max_concurrent_inbound_calls: u16,
+    pub max_concurrent_outbound_calls: u16,
+    pub max_concurrent_voice_calls: u16,
     pub secret_names: Vec<String>,
     #[serde(default)]
     pub deletion_protection: bool,
@@ -253,6 +256,8 @@ impl CloudDeployment {
                 },
                 domains: BTreeMap::new(),
                 max_concurrent_inbound_calls: 2,
+                max_concurrent_outbound_calls: 2,
+                max_concurrent_voice_calls: 2,
                 secret_names: REQUIRED_SECRET_NAMES
                     .iter()
                     .map(|value| (*value).into())
@@ -294,10 +299,19 @@ impl CloudDeployment {
         if self.spec.environment == Environment::Production && !production_profile {
             bail!("production requires production_baseline or production_growth");
         }
-        if self.spec.max_concurrent_inbound_calls == 0
-            || self.spec.max_concurrent_inbound_calls > 500
+        if !(1..=500).contains(&self.spec.max_concurrent_inbound_calls)
+            || !(1..=500).contains(&self.spec.max_concurrent_outbound_calls)
+            || !(1..=500).contains(&self.spec.max_concurrent_voice_calls)
+            || self.spec.max_concurrent_voice_calls
+                < self
+                    .spec
+                    .max_concurrent_inbound_calls
+                    .min(self.spec.max_concurrent_outbound_calls)
+            || u32::from(self.spec.max_concurrent_voice_calls)
+                > u32::from(self.spec.max_concurrent_inbound_calls)
+                    + u32::from(self.spec.max_concurrent_outbound_calls)
         {
-            bail!("maxConcurrentInboundCalls must be between 1 and 500");
+            bail!("carrier voice capacities must be bounded and internally aligned");
         }
         if self.spec.host_image.starts_with("REPLACE") {
             bail!("spec.hostImage must resolve from a verified machine-image catalog");

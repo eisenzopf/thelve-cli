@@ -30,6 +30,7 @@ const INTERNAL_SECRET_NAMES: &[&str] = &[
     "minio-root-password",
     "oidc/client-secret",
     "backup/destination",
+    "sip-egress-root",
 ];
 
 #[derive(Serialize)]
@@ -91,9 +92,6 @@ pub fn set(
 }
 
 pub fn initialize_internal(config_path: &Path, intent: &CloudDeployment) -> Result<()> {
-    if !matches!(&intent.spec.provider, Provider::Gcp { .. }) {
-        bail!("internal-secret initialization is currently implemented for GCP only");
-    }
     let directory = terraform::workspace(config_path, intent)?;
     let resources = terraform::secret_resources(&directory, intent.spec.provider.kind())?;
     let missing_resources = INTERNAL_SECRET_NAMES
@@ -152,8 +150,9 @@ pub fn initialize_internal(config_path: &Path, intent: &CloudDeployment) -> Resu
         completed.push(*name);
     }
     println!(
-        "initialized {} correlated internal secrets directly in GCP Secret Manager; no values entered argv, state, logs, or deployment files",
-        completed.len()
+        "initialized {} correlated internal secrets directly in {} secret management; no values entered argv, state, logs, or deployment files",
+        completed.len(),
+        intent.spec.provider.kind()
     );
     Ok(())
 }
@@ -199,6 +198,7 @@ fn generated_internal_values(
         ),
         ("minio-root-password".into(), random_token()),
         ("oidc/client-secret".into(), random_token()),
+        ("sip-egress-root".into(), random_token()),
         (
             "backup/destination".into(),
             Zeroizing::new(backup_destination.into()),

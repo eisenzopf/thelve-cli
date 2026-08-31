@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use include_dir::{Dir, include_dir};
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     config::{CloudDeployment, CloudProvider, Provider, load},
@@ -121,6 +122,130 @@ pub fn apply(config_path: &Path, state: HostState, destroy: bool) -> Result<()> 
         "thelve.tfplan".into(),
     ]))?;
     Ok(())
+}
+
+pub fn replace_gcp_node(config_path: &Path) -> Result<serde_json::Value> {
+    let intent = load(config_path)?;
+    if intent.spec.provider.kind() != CloudProvider::Gcp {
+        bail!("replace-node currently requires a GCP deployment intent");
+    }
+    let before = outputs(config_path, &intent)?;
+    let directory = prepare_workspace(config_path, &intent, HostState::Running)?;
+    init(&directory)?;
+    let binary = iac_binary()?;
+    let plan_file = directory.join("thelve-replace-node.tfplan");
+    process::inherit(&CommandPlan::new(&binary).args([
+        format!("-chdir={}", directory.display()),
+        "plan".into(),
+        "-replace=google_compute_instance.thelve".into(),
+        "-input=false".into(),
+        "-lock-timeout=5m".into(),
+        "-no-color".into(),
+        "-out=thelve-replace-node.tfplan".into(),
+    ]))?;
+    let plan_json = process::capture_named(
+        &CommandPlan::new(&binary).args([
+            format!("-chdir={}", directory.display()),
+            "show".into(),
+            "-json".into(),
+            "thelve-replace-node.tfplan".into(),
+        ]),
+        "inspect exact GCP node replacement plan",
+    )?;
+    let plan: serde_json::Value =
+        serde_json::from_str(&plan_json).context("parse GCP node replacement plan")?;
+    validate_exact_gcp_replacement(&plan)?;
+    let plan_sha256 = format!(
+        "sha256:{:x}",
+        Sha256::digest(fs::read(&plan_file).context("read saved node replacement plan")?)
+    );
+    process::inherit(&CommandPlan::new(binary).args([
+        format!("-chdir={}", directory.display()),
+        "apply".into(),
+        "-input=false".into(),
+        "-lock-timeout=5m".into(),
+        "-no-color".into(),
+        "thelve-replace-node.tfplan".into(),
+    ]))?;
+    let after = outputs(config_path, &intent)?;
+    let after_instance = output_string(&after, "instance_id")?;
+    let planned_before_instance = plan
+        .get("resource_changes")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|changes| {
+            changes.iter().find(|change| {
+                change.get("address").and_then(serde_json::Value::as_str)
+                    == Some("google_compute_instance.thelve")
+            })
+        })
+        .and_then(|change| change.pointer("/change/before/instance_id"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unavailable");
+    let before_ip = output_string(&before, "public_ip")?;
+    let after_ip = output_string(&after, "public_ip")?;
+    if before_ip != after_ip {
+        bail!("static public address changed during node replacement");
+    }
+    Ok(serde_json::json!({
+        "schemaVersion": "thelve.gcp-node-replacement-apply/v1",
+        "resourceAddress": "google_compute_instance.thelve",
+        "planSha256": plan_sha256,
+        "plannedOldInstanceId": planned_before_instance,
+        "newInstanceId": after_instance,
+        "publicIp": after_ip,
+        "instanceName": output_string(&after, "instance_name")?,
+        "bootDiskName": output_string(&after, "boot_disk_name")?,
+        "exactResourceReplacement": true,
+        "secretValuesRecorded": false
+    }))
+}
+
+fn validate_exact_gcp_replacement(plan: &serde_json::Value) -> Result<()> {
+    let changes = plan
+        .get("resource_changes")
+        .and_then(serde_json::Value::as_array)
+        .context("replacement plan has no resource changes")?;
+    let mut mutated = Vec::new();
+    for change in changes {
+        let actions = change
+            .pointer("/change/actions")
+            .and_then(serde_json::Value::as_array)
+            .context("replacement plan change has no actions")?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        if actions
+            .iter()
+            .all(|action| matches!(*action, "no-op" | "read"))
+        {
+            continue;
+        }
+        mutated.push((
+            change
+                .get("address")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unknown>"),
+            actions,
+        ));
+    }
+    if mutated.len() != 1
+        || mutated[0].0 != "google_compute_instance.thelve"
+        || !mutated[0].1.contains(&"create")
+        || !mutated[0].1.contains(&"delete")
+        || mutated[0].1.len() != 2
+    {
+        bail!(
+            "replacement plan is not an exact, one-resource GCP instance replacement; reconcile ordinary drift first"
+        );
+    }
+    Ok(())
+}
+
+fn output_string<'a>(outputs: &'a serde_json::Value, name: &str) -> Result<&'a str> {
+    outputs
+        .pointer(&format!("/{name}/value"))
+        .and_then(serde_json::Value::as_str)
+        .with_context(|| format!("Terraform output {name:?} is unavailable or not a string"))
 }
 
 pub fn status(config_path: &Path) -> Result<()> {

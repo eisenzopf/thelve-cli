@@ -42,20 +42,32 @@ jobs:
         id: package
         shell: bash
         run: |
+          binary="thelve-${GITHUB_REF_NAME}-${{ matrix.target }}"
           artifact="thelve-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          install -m 0755 "target/${{ matrix.target }}/release/thelve" "$binary"
           tar -C "target/${{ matrix.target }}/release" -czf "$artifact" thelve
+          shasum -a 256 "$binary" > "$binary.sha256"
           shasum -a 256 "$artifact" > "$artifact.sha256"
+          echo "binary=$binary" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
-      - name: Keyless-sign exact archive
+      - name: Keyless-sign exact binary and archive
         shell: bash
-        run: cosign sign-blob --yes --bundle "${{ steps.package.outputs.artifact }}.sigstore.json" "${{ steps.package.outputs.artifact }}"
+        run: |
+          cosign sign-blob --yes --bundle "${{ steps.package.outputs.binary }}.sigstore.json" "${{ steps.package.outputs.binary }}"
+          cosign sign-blob --yes --bundle "${{ steps.package.outputs.artifact }}.sigstore.json" "${{ steps.package.outputs.artifact }}"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: ${{ steps.package.outputs.binary }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: ${{ steps.package.outputs.artifact }}
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           files: |
+            ${{ steps.package.outputs.binary }}
+            ${{ steps.package.outputs.binary }}.sha256
+            ${{ steps.package.outputs.binary }}.sigstore.json
             ${{ steps.package.outputs.artifact }}
             ${{ steps.package.outputs.artifact }}.sha256
             ${{ steps.package.outputs.artifact }}.sigstore.json

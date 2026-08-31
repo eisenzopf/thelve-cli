@@ -17,7 +17,7 @@
   "compatibility": {
     "cli": ">=0.1.0,<1.0.0",
     "hostContract": "thelve.single-node-cloud-bootstrap/v1",
-    "requiredRuntimeSecrets": ["database-url", "migration-database-url", "realtime-callback-database-url", "realtime-internal-token", "control-api-service-token", "postgres-password", "redis-password", "keycloak-database-password", "minio-root-user", "minio-root-password", "oidc/client-secret", "backup/destination", "telnyx-api-key", "telnyx-public-key"],
+    "requiredRuntimeSecrets": ["database-url", "migration-database-url", "realtime-callback-database-url", "realtime-internal-token", "control-api-service-token", "postgres-password", "redis-password", "keycloak-database-password", "minio-root-user", "minio-root-password", "oidc/client-secret", "backup/destination", "telnyx-api-key", "telnyx-public-key", "sip-egress-root"],
     "architecture": ["linux/x86_64"]
   }
 }
