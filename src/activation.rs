@@ -649,6 +649,9 @@ activation_stage=verify-release
 sudo_node "$stage/thelve-node" verify --bundle "$stage/release/bundle" --trust-store "$stage/offline-trust.json" > "$stage/verify.json"
 managed_service_stopped=false
 if sudo systemctl is-active --quiet thelve.service; then
+  managed_service_stopped=true
+fi
+if sudo test -L /opt/thelve/current; then
   activation_stage=verify-managed-service
   test "$(sudo systemctl show thelve.service --property=FragmentPath --value)" = /etc/systemd/system/thelve.service
   test "$(sudo stat -c '%U:%G:%a' /etc/systemd/system/thelve.service)" = root:root:644
@@ -665,9 +668,21 @@ if sudo systemctl is-active --quiet thelve.service; then
   current_unit_path="$(sudo jq -er '.spec.artifacts | map(select(.kind == "systemd_unit")) | if length == 1 then .[0].path else error("systemd unit cardinality") end' "$current_release/bundle/deployment.release.json")"
   case "$current_unit_path" in /*|../*|*/../*|*/..) false ;; esac
   sudo cmp --silent -- /etc/systemd/system/thelve.service "$current_release/bundle/$current_unit_path"
+  sudo test -f "$current_release/compose.yaml"
+  sudo test ! -L "$current_release/compose.yaml"
+  test "$(sudo stat -c '%U:%G:%a' "$current_release/compose.yaml")" = root:root:444
+  sudo test -f /etc/thelve/runtime.env
+  sudo test ! -L /etc/thelve/runtime.env
+  test "$(sudo stat -c '%U:%G:%a' /etc/thelve/runtime.env)" = root:root:600
   activation_stage=stop-managed-service
   sudo_node "$stage/thelve-node" stop > "$stage/stop.json"
-  managed_service_stopped=true
+  activation_stage=remove-residual-runtime
+  sudo env HOME=/root DOCKER_CONFIG=/etc/thelve/docker PATH=/usr/local/bin:/usr/bin:/bin \
+    /usr/bin/docker compose --project-directory "$current_release" \
+    --env-file /etc/thelve/runtime.env -f "$current_release/compose.yaml" \
+    down --timeout 120 >/dev/null
+else
+  test "$managed_service_stopped" = false
 fi
 activation_stage=activation-preflight
 preflight_attempt=1
@@ -1053,6 +1068,11 @@ mod tests {
         assert!(command.contains("cmp --silent -- /etc/systemd/system/thelve.service"));
         assert!(command.contains("activation_stage=stop-managed-service"));
         assert!(command.contains("sudo_node \"$stage/thelve-node\" stop"));
+        assert!(command.contains("activation_stage=remove-residual-runtime"));
+        assert!(command.contains("docker compose --project-directory \"$current_release\""));
+        assert!(command.contains("down --timeout 120"));
+        assert!(command.contains("stat -c '%U:%G:%a' \"$current_release/compose.yaml\""));
+        assert!(command.contains("stat -c '%U:%G:%a' /etc/thelve/runtime.env"));
         assert!(command.contains("preflight_attempt=1"));
         assert!(command.contains("while [ \"$preflight_attempt\" -le 24 ]"));
         assert!(command.contains("sleep 5"));
