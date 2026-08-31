@@ -1,8 +1,9 @@
 # Thelve CLI implementation status
 
 Overall status: **Partial — provider-neutral outbound and GCP recovery contracts
-are implemented and signed CLI `v0.1.4` is public, while clean-node restore and
-live outbound acceptance remain** · Updated 2026-08-31
+are implemented and signed CLI `v0.1.5` is public; residual-runtime recovery is
+hardened, while final clean-node restore and live outbound acceptance remain**
+· Updated 2026-08-31
 
 ## Implemented
 
@@ -89,6 +90,14 @@ live outbound acceptance remain** · Updated 2026-08-31
   and artifact-transfer steps across six bounded IAP/SSH attempts. Reused
   staging directories must be owned by the OS Login caller and mode `0700`;
   activation never silently resets or replaces a node.
+- Activation treats a verified `/opt/thelve/current` installation as managed
+  state even when systemd is inactive. Before installing a new release it
+  verifies the prior signed bundle, exact systemd unit, root ownership and
+  modes of Compose/runtime inputs, invokes the signed stop path, and performs
+  an explicit Compose teardown. This prevents Docker from reviving
+  recovery-only containers on reboot and creating directories at missing
+  tmpfs secret bind paths. An active service without a verifiable current
+  installation remains fail-closed.
 - Live GCP preview evidence: signed release `0.1.0-preview.15` was fetched and
   reverified against an independently pinned trust-root digest, rendered, and
   activated on qualified image
@@ -132,6 +141,14 @@ live outbound acceptance remain** · Updated 2026-08-31
   `sha256:6c59c2cb7eca916dfd78f275241f5f629f53850d246904da22b4cc6d882fc8ae`;
   the installed Apple Silicon rehearsal binary is independently attested at
   `sha256:78b9552821e429ec845c684ec7dccbdb7add27ba09392abc5ee81107bfbc7f23`.
+- Public release `v0.1.5` is bound to commit
+  `ff6c15591f8fc5b050b99af726eb37034d4eb965`. Hosted release run
+  `33442009508` passed Linux, Intel macOS, and Apple Silicon publication jobs;
+  hosted main verification run `33442008454` also passed. The independently
+  verified Linux binary used for release qualification is
+  `sha256:f80067882277130402b36d35a8da9c09f8c4f34c9f24425ae8df19bb29c4f690`;
+  the installed Apple Silicon binary is checksum- and attestation-verified at
+  `sha256:ce5accb5794f2844f12b0f4836278228028def18f804a4e32c2b5517ae0fd348`.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC
   9421-style signed envelopes, live capability discovery, guarded reads,
   exact-payload configuration plans, approved-plan verification, and apply.
@@ -157,8 +174,9 @@ live outbound acceptance remain** · Updated 2026-08-31
 - Verify channel-to-release linkage, freshness/rollback state, catalog
   revocation, CLI-version compatibility, and provider/region image selection as
   a single transaction.
-- Reactivate the corrected signed GCP release and retain browser/WebRTC/call
-  evidence; implement equivalent AWS SSM transport and activation.
+- Activate the final clock- and recovery-hardened GCP release and retain
+  browser/WebRTC/call evidence; implement equivalent AWS SSM transport and
+  activation.
 - Execute the implemented GCP backup/restore and exact node-replacement path on
   the retained preview deployment and preserve its redacted receipts.
 - Add release list/select, logs, upgrade/rollback, support bundle, capacity
