@@ -26,6 +26,8 @@ const MAX_NODE_CONFIG_BYTES: u64 = 1024 * 1024;
 const ARTIFACT_REGISTRY_READER_ROLE: &str = "roles/artifactregistry.reader";
 const GCP_SSH_READY_ATTEMPTS: u8 = 24;
 const GCP_SSH_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
+const GCP_ACTIVATION_TRANSFER_ATTEMPTS: u8 = 6;
+const GCP_ACTIVATION_TRANSFER_RETRY_DELAY: Duration = Duration::from_secs(5);
 const GCP_ACTIVATION_PREFLIGHT_ATTEMPTS: u8 = 24;
 const GCP_ACTIVATION_PREFLIGHT_RETRY_SECONDS: u8 = 5;
 
@@ -307,9 +309,9 @@ pub fn activate_gcp(
     let remote_stage = format!("/tmp/{stage_name}");
     let target = format!("{instance}:{remote_stage}/");
     let ssh_base = |command: String| gcp_activation_ssh_plan(instance, project_id, zone, command);
-    process::inherit(&ssh_base(format!(
-        "set -eu; umask 077; test ! -e {remote_stage}; mkdir {remote_stage}"
-    )))?;
+    retry_activation_transfer("prepare the remote activation stage", || {
+        process::inherit(&ssh_base(remote_stage_prepare_command(&remote_stage)))
+    })?;
 
     let result = (|| {
         let mut scp = CommandPlan::new("gcloud").args([
@@ -328,7 +330,9 @@ pub fn activate_gcp(
             scp = scp.arg(local_stage.path().join(name).display().to_string());
         }
         scp = scp.arg(target);
-        process::inherit(&scp)?;
+        retry_activation_transfer("transfer signed activation artifacts", || {
+            process::inherit(&scp)
+        })?;
 
         grant_registry_reader(
             project_id,
@@ -571,6 +575,35 @@ where
         }
     }
     unreachable!("a positive bounded retry loop always returns")
+}
+
+fn retry_activation_transfer<F>(label: &str, operation: F) -> Result<u8>
+where
+    F: FnMut() -> Result<()>,
+{
+    retry_until_ready(
+        GCP_ACTIVATION_TRANSFER_ATTEMPTS,
+        GCP_ACTIVATION_TRANSFER_RETRY_DELAY,
+        operation,
+        |attempt, delay| {
+            eprintln!(
+                "{label} encountered a transient IAP/SSH failure (attempt {attempt}/{GCP_ACTIVATION_TRANSFER_ATTEMPTS}); retrying in {} seconds",
+                delay.as_secs()
+            );
+            thread::sleep(delay);
+        },
+    )
+    .with_context(|| {
+        format!(
+            "{label} failed after {GCP_ACTIVATION_TRANSFER_ATTEMPTS} bounded attempts"
+        )
+    })
+}
+
+fn remote_stage_prepare_command(remote_stage: &str) -> String {
+    format!(
+        "set -eu; umask 077; if [ -e {remote_stage} ]; then test -d {remote_stage}; test \"$(stat -c %u {remote_stage})\" -eq \"$(id -u)\"; test \"$(stat -c %a {remote_stage})\" = 700; else mkdir {remote_stage}; fi"
+    )
 }
 
 fn remote_activation_command(
@@ -1228,6 +1261,20 @@ mod tests {
                 .contains(&"--ssh-flag=-oServerAliveCountMax=20".into())
         );
         assert_eq!(plan.args.last().map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn remote_activation_stage_can_be_reused_only_by_its_owner() {
+        let stage = "/tmp/thelve-activation-123e4567-e89b-12d3-a456-426614174000";
+        let command = remote_stage_prepare_command(stage);
+        assert!(command.contains("if [ -e"));
+        assert!(command.contains("test -d"));
+        assert!(command.contains("stat -c %u"));
+        assert!(command.contains("id -u"));
+        assert!(command.contains("stat -c %a"));
+        assert!(command.contains("= 700"));
+        assert!(command.contains("else mkdir"));
+        assert_eq!(command.matches(stage).count(), 5);
     }
 
     #[test]

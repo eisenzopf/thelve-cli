@@ -53,6 +53,36 @@ pub fn verify_backup(config_path: &Path, backup_id: Uuid) -> Result<Value> {
     Ok(value)
 }
 
+pub fn restore_backup(
+    config_path: &Path,
+    release_root: &Path,
+    backup_id: Uuid,
+    output: &Path,
+) -> Result<()> {
+    if output.exists() {
+        bail!("refusing to overwrite existing {}", output.display());
+    }
+    let intent = config::load(config_path)?;
+    require_gcp(&intent)?;
+    let (target_release, _) = preview::verify_fetched(release_root)?;
+    ensure_release_project(&intent, &target_release)?;
+    verify_backup(config_path, backup_id)?;
+
+    let restore = restore_on_active_node(
+        config_path,
+        backup_id,
+        &target_release.deployment_release_sha256,
+    )?;
+    let mut bytes = serde_json::to_vec_pretty(&restore)?;
+    bytes.push(b'\n');
+    create_private(output, &bytes)?;
+    println!(
+        "backup {backup_id} restored and receipt written to {}",
+        output.display()
+    );
+    Ok(())
+}
+
 pub fn replace_gcp_node(
     config_path: &Path,
     release_root: &Path,
@@ -88,26 +118,8 @@ pub fn replace_gcp_node(
     activation::render_node_config(config_path, release_root, &node_config, tls_contact_email)?;
     activation::activate_gcp(config_path, release_root, &node_config, &activation_receipt)?;
 
-    let restore_command = format!("sudo /opt/thelve/bin/thelve-restore --backup-id {backup_id}");
-    let restore = match capture_receipt(
+    let restore = restore_on_active_node(
         config_path,
-        restore_command,
-        "restore verified backup on replacement node",
-    ) {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = activation::capture_gcp_remote(
-                config_path,
-                "sudo systemctl stop thelve.service",
-                "fail-close replacement node after restore failure",
-            );
-            return Err(error.context(
-                "replacement node was left fail-closed; retained backup was not deleted",
-            ));
-        }
-    };
-    validate_restore_receipt(
-        &restore,
         backup_id,
         &target_release.deployment_release_sha256,
     )?;
@@ -150,6 +162,34 @@ pub fn replace_gcp_node(
         receipt_path.display()
     );
     Ok(())
+}
+
+fn restore_on_active_node(
+    config_path: &Path,
+    backup_id: Uuid,
+    target_release: &str,
+) -> Result<Value> {
+    let restore_command = format!("sudo /opt/thelve/bin/thelve-restore --backup-id {backup_id}");
+    let result = capture_receipt(
+        config_path,
+        restore_command,
+        "restore verified backup on active node",
+    )
+    .and_then(|value| {
+        validate_restore_receipt(&value, backup_id, target_release)?;
+        Ok(value)
+    });
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let _ = activation::capture_gcp_remote(
+                config_path,
+                "sudo systemctl stop thelve.service",
+                "fail-close node after restore failure",
+            );
+            Err(error.context("node was left fail-closed; retained backup was not deleted"))
+        }
+    }
 }
 
 fn capture_receipt(config_path: &Path, remote_command: String, label: &str) -> Result<Value> {

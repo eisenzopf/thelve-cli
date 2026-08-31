@@ -25,7 +25,7 @@ remote inputs verified by digest and signature.
 - direct hidden-input writes to GCP Secret Manager or AWS Secrets Manager
 - one-shot correlated generation of non-Telnyx GCP or AWS runtime secrets without
   local persistence: `thelve secret initialize-internal`
-- encrypted GCS backup creation/verification and exact GCE node replacement
+- encrypted GCS backup creation/verification/restore and exact GCE node replacement
   with retained static IP, network, secret containers, backup bucket, and
   application state
 - value-free node configuration rendering and signed-release activation over

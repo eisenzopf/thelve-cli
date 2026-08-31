@@ -134,6 +134,27 @@ remain. Restore failure leaves the new application stopped and retains the
 backup. The current recovery transport is deliberately GCP-first; AWS recovery
 must not be inferred from these commands.
 
+If replacement has already created the fresh VM but a transient IAP transfer
+or a restore safety gate stops the combined command, do not replace the node a
+second time. Activate the same verified target release, then resume only the
+verified restore:
+
+```sh
+thelve deploy activate-gcp --config deployment.yaml \
+  --release-dir verified-preview --node-config node.yaml \
+  --receipt recovery-activation-receipt.json --approve
+thelve backup restore --config deployment.yaml \
+  --release-dir verified-preview --backup-id BACKUP_UUID \
+  --output restore-receipt.json --approve
+```
+
+`backup restore` re-verifies the signed target release and immutable backup,
+accepts only the current ready gateway receipt, writes a value-free local
+receipt, and stops the application again if execution or receipt validation
+fails. Activation retries only the idempotent, owner-checked staging and SCP
+steps across bounded transient IAP/SSH failures; it never silently replaces or
+resets a node.
+
 The TLS contact email is operational metadata, not a secret, but it must be a
 real operator-selected address for ACME notices. Do not substitute an example
 address in an actual activation. Stop after `prepare` if the contact or either

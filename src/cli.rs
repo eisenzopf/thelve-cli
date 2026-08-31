@@ -24,7 +24,7 @@ enum Command {
     Release(CatalogArgs),
     /// Create and operate a cloud single-node deployment.
     Deploy(DeployArgs),
-    /// Create and verify encrypted single-node recovery points.
+    /// Create, verify, and restore encrypted single-node recovery points.
     Backup(BackupArgs),
     /// Populate cloud secret-manager values without Terraform state or argv exposure.
     Secret(SecretArgs),
@@ -425,6 +425,19 @@ enum BackupCommand {
         #[arg(long)]
         backup_id: Uuid,
     },
+    /// Restore a verified recovery point onto the already activated node.
+    Restore {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        release_dir: PathBuf,
+        #[arg(long)]
+        backup_id: Uuid,
+        #[arg(long, default_value = "restore-receipt.json")]
+        output: PathBuf,
+        #[arg(long)]
+        approve: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -616,6 +629,16 @@ pub fn execute(cli: Cli) -> Result<()> {
             BackupCommand::Verify { config, backup_id } => {
                 let value = recovery::verify_backup(&config, backup_id)?;
                 print_json(&value)
+            }
+            BackupCommand::Restore {
+                config,
+                release_dir,
+                backup_id,
+                output,
+                approve,
+            } => {
+                require_approval(approve, "backup restore")?;
+                recovery::restore_backup(&config, &release_dir, backup_id, &output)
             }
         },
         Command::Secret(args) => match args.command {
