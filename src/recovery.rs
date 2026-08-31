@@ -188,7 +188,11 @@ fn validate_restore_receipt(value: &Value, backup_id: Uuid, target_release: &str
             .and_then(Value::as_bool)
             == Some(true)
         && value.get("migrationsApplied").and_then(Value::as_bool) == Some(true)
-        && value.pointer("/readiness/ready").and_then(Value::as_bool) == Some(true)
+        && value.pointer("/readiness/status").and_then(Value::as_str) == Some("ready")
+        && value
+            .pointer("/readiness/blockers")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
         && value
             .get("targetDeploymentReleaseSha256")
             .and_then(Value::as_str)
@@ -447,6 +451,20 @@ mod tests {
         })
     }
 
+    fn restore(readiness: Value) -> Value {
+        json!({
+            "schemaVersion": RESTORE_SCHEMA,
+            "backupId": "223e4567-e89b-42d3-a456-426614174000",
+            "databaseRestored": true,
+            "objectsRestoredOrRetained": true,
+            "migrationsApplied": true,
+            "readiness": readiness,
+            "targetDeploymentReleaseSha256": format!("sha256:{}", "b".repeat(64)),
+            "secretsRestored": false,
+            "secretValuesRecorded": false
+        })
+    }
+
     #[test]
     fn backup_receipt_requires_verification_and_secret_exclusion() {
         let id = Uuid::parse_str("223e4567-e89b-42d3-a456-426614174000").unwrap();
@@ -491,6 +509,27 @@ mod tests {
             json!({}),
         ] {
             assert!(!activation_is_ready(&stale_or_failed));
+        }
+    }
+
+    #[test]
+    fn restore_requires_the_current_gateway_readiness_contract() {
+        let id = Uuid::parse_str("223e4567-e89b-42d3-a456-426614174000").unwrap();
+        let release = format!("sha256:{}", "b".repeat(64));
+        assert!(
+            validate_restore_receipt(
+                &restore(json!({"status":"ready", "blockers":[]})),
+                id,
+                &release,
+            )
+            .is_ok()
+        );
+        for stale_or_blocked in [
+            json!({"ready":true}),
+            json!({"status":"ready", "blockers":["database"]}),
+            json!({"status":"blocked", "blockers":[]}),
+        ] {
+            assert!(validate_restore_receipt(&restore(stale_or_blocked), id, &release).is_err());
         }
     }
 }
