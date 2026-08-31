@@ -1,9 +1,8 @@
 # Thelve CLI implementation status
 
 Overall status: **Partial — provider-neutral outbound and GCP recovery contracts
-are implemented and the first signed binary is public, while the corrected
-recovery receipt release, clean-node restore, and live outbound acceptance
-remain** · Updated 2026-08-31
+are implemented and signed CLI `v0.1.2` is public, while clean-node restore and
+live outbound acceptance remain** · Updated 2026-08-31
 
 ## Implemented
 
@@ -117,6 +116,11 @@ remain** · Updated 2026-08-31
   Terraform and GitHub Actions updates.
 - The `cli-release` GitHub environment requires explicit owner review and a
   protected branch; tagged binary publication is bound to that environment.
+- Public release `v0.1.2` is bound to commit `2bc2549`. Hosted run
+  `33414813366` passed all Linux, Intel macOS, and Apple Silicon build, test,
+  keyless-signing, provenance, and publication jobs. The independently checked
+  Linux binary digest used by GCP qualification is
+  `sha256:33cf26878db4dea1d0e1e83b0323248ca90694fda940899db0e70437c21a0b3f`.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC
   9421-style signed envelopes, live capability discovery, guarded reads,
   exact-payload configuration plans, approved-plan verification, and apply.
