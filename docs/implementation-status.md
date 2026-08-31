@@ -1,8 +1,9 @@
 # Thelve CLI implementation status
 
 Overall status: **Partial — provider-neutral outbound and GCP recovery contracts
-are implemented locally, while signed binary publication, Cloud Build
-qualification, clean-node restore, and live outbound acceptance remain** · Updated 2026-08-30
+are implemented and the first signed binary is public, while the corrected
+recovery receipt release, clean-node restore, and live outbound acceptance
+remain** · Updated 2026-08-31
 
 ## Implemented
 
@@ -50,6 +51,10 @@ qualification, clean-node restore, and live outbound acceptance remain** · Upda
   static IP/network/runtime identity/secret containers/backup bucket were
   retained, activates the target release, restores state, and leaves a failed
   restoration stopped with the backup retained.
+- Replacement evidence projects activation readiness from the current signed
+  gateway contract (`readiness.status == ready`); the obsolete boolean shape is
+  explicitly rejected so a successful replacement cannot emit an ambiguous
+  `null` readiness value.
 - Optional provider-native log agents are disabled by default and admitted only
   with an immutable HTTPS package URL plus lowercase SHA-256.
 - Independently pinned trust-root digest plus JSON Schema checks for the root
@@ -92,7 +97,7 @@ qualification, clean-node restore, and live outbound acceptance remain** · Upda
   was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
-- All 41 CLI tests pass with outbound-capacity, SIP-egress-secret, and exact
+- All 42 CLI tests pass with outbound-capacity, SIP-egress-secret, exact
   replacement coverage; final strict Clippy and release-workflow validation
   are rerun before publication.
 - Public repository `https://github.com/eisenzopf/thelve-cli` hosts `main`; its

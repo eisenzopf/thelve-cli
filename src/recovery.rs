@@ -132,7 +132,7 @@ pub fn replace_gcp_node(
         },
         "activation": {
             "operationId": activation.get("operationId"),
-            "ready": activation.pointer("/readiness/ready"),
+            "ready": activation_is_ready(&activation),
             "secretValuesRecorded": false
         },
         "restore": restore,
@@ -199,6 +199,10 @@ fn validate_restore_receipt(value: &Value, backup_id: Uuid, target_release: &str
         bail!("remote restore receipt failed the recovery contract");
     }
     Ok(())
+}
+
+fn activation_is_ready(value: &Value) -> bool {
+    value.pointer("/readiness/status").and_then(Value::as_str) == Some("ready")
 }
 
 fn cloud_identity(config_path: &Path, intent: &CloudDeployment) -> Result<Value> {
@@ -474,5 +478,19 @@ mod tests {
         let mut wrong = after;
         wrong["publicIp"] = "203.0.113.9".into();
         assert!(validate_replacement_identities(&before, &wrong, &applied).is_err());
+    }
+
+    #[test]
+    fn replacement_projects_the_current_activation_readiness_contract() {
+        let ready = json!({"readiness":{"status":"ready"}});
+        assert!(activation_is_ready(&ready));
+
+        for stale_or_failed in [
+            json!({"readiness":{"ready":true}}),
+            json!({"readiness":{"status":"blocked"}}),
+            json!({}),
+        ] {
+            assert!(!activation_is_ready(&stale_or_failed));
+        }
     }
 }
