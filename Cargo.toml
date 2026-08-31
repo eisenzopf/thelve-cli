@@ -1,6 +1,6 @@
 [package]
 name = "thelve-cli"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Cloud-only deployment and operations CLI for Thelve"
