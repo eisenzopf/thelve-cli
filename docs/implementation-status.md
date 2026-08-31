@@ -1,7 +1,7 @@
 # Thelve CLI implementation status
 
 Overall status: **Partial — provider-neutral outbound and GCP recovery contracts
-are implemented and signed CLI `v0.1.2` is public, while clean-node restore and
+are implemented and signed CLI `v0.1.3` is public, while clean-node restore and
 live outbound acceptance remain** · Updated 2026-08-31
 
 ## Implemented
@@ -96,7 +96,7 @@ live outbound acceptance remain** · Updated 2026-08-31
   was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
-- All 42 CLI tests pass with outbound-capacity, SIP-egress-secret, exact
+- All 43 CLI tests pass with outbound-capacity, SIP-egress-secret, exact
   replacement coverage; final strict Clippy and release-workflow validation
   are rerun before publication.
 - Public repository `https://github.com/eisenzopf/thelve-cli` hosts `main`; its
@@ -116,11 +116,13 @@ live outbound acceptance remain** · Updated 2026-08-31
   Terraform and GitHub Actions updates.
 - The `cli-release` GitHub environment requires explicit owner review and a
   protected branch; tagged binary publication is bound to that environment.
-- Public release `v0.1.2` is bound to commit `2bc2549`. Hosted run
-  `33414813366` passed all Linux, Intel macOS, and Apple Silicon build, test,
+- Public release `v0.1.3` is bound to commit `c25d89f`. Hosted run
+  `33420780646` passed all Linux, Intel macOS, and Apple Silicon build, test,
   keyless-signing, provenance, and publication jobs. The independently checked
   Linux binary digest used by GCP qualification is
-  `sha256:33cf26878db4dea1d0e1e83b0323248ca90694fda940899db0e70437c21a0b3f`.
+  `sha256:32a7130bc2b365d0efe2e429bc94a64e5d60278dc3575dbcf4d192946059d00b`;
+  the installed Apple Silicon rehearsal binary is independently attested at
+  `sha256:e16f3e1d2371253e302fd6ce2947c60719870c331b5810cd785a6586dbb7a3f5`.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC
   9421-style signed envelopes, live capability discovery, guarded reads,
   exact-payload configuration plans, approved-plan verification, and apply.
@@ -141,7 +143,8 @@ live outbound acceptance remain** · Updated 2026-08-31
 
 ## Open gates
 
-- Publish the signed CLI and authenticated trust-root/install instructions.
+- Publish standard `brew install thelve` metadata and authenticated
+  trust-root/install instructions around the already signed public CLI.
 - Verify channel-to-release linkage, freshness/rollback state, catalog
   revocation, CLI-version compatibility, and provider/region image selection as
   a single transaction.
