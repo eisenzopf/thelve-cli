@@ -7,12 +7,63 @@ if [ -f "$receipt" ]; then
   exit 0
 fi
 
-for command in docker containerd chronyd nft jq curl sha256sum; do
+for command in docker containerd chronyd nft jq curl sha256sum awk mktemp; do
   command -v "$command" >/dev/null
 done
 docker compose version >/dev/null
 test -x /usr/local/libexec/thelve-image-qualification
 /usr/local/libexec/thelve-image-qualification >/dev/null
+
+%{ if !enable_ops_agent ~}
+# Google enables guest-agent Cloud Logging by default. A deployment whose
+# observability export is explicitly "none" must disable that path instead of
+# granting an unused logging writer role or continuously emitting denied API
+# calls. Keep the agent's local journal output; only its cloud export changes.
+guest_agent_config=/etc/default/instance_configs.cfg
+guest_agent_config_tmp=$(mktemp /etc/default/instance_configs.cfg.thelve.XXXXXX)
+if [ ! -e "$guest_agent_config" ]; then
+  install -m 0644 /dev/null "$guest_agent_config"
+fi
+awk '
+  BEGIN { in_core = 0; core_seen = 0; option_seen = 0 }
+  /^\[Core\][[:space:]]*$/ {
+    in_core = 1
+    core_seen = 1
+    print
+    next
+  }
+  /^\[/ {
+    if (in_core && !option_seen) {
+      print "cloud_logging_enabled = false"
+      option_seen = 1
+    }
+    in_core = 0
+  }
+  {
+    if (in_core && $0 ~ /^[[:space:]]*cloud_logging_enabled[[:space:]]*=/) {
+      if (!option_seen) {
+        print "cloud_logging_enabled = false"
+      }
+      option_seen = 1
+      next
+    }
+    print
+  }
+  END {
+    if (in_core && !option_seen) {
+      print "cloud_logging_enabled = false"
+    } else if (!core_seen) {
+      print ""
+      print "[Core]"
+      print "cloud_logging_enabled = false"
+    }
+  }
+' "$guest_agent_config" > "$guest_agent_config_tmp"
+chown root:root "$guest_agent_config_tmp"
+chmod 0644 "$guest_agent_config_tmp"
+mv "$guest_agent_config_tmp" "$guest_agent_config"
+systemctl restart google-guest-agent-manager.service
+%{ endif ~}
 
 # The privileged host materializer needs workload identity, but application
 # containers do not. GCP exposes its guest DNS resolver and metadata service on

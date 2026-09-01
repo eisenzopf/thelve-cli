@@ -257,10 +257,11 @@ resource "google_compute_instance" "thelve" {
   }
 
   metadata = {
-    enable-oslogin         = "TRUE"
-    enable-osconfig        = "TRUE"
-    block-project-ssh-keys = "TRUE"
-    serial-port-enable     = "FALSE"
+    enable-oslogin          = "TRUE"
+    enable-osconfig         = "TRUE"
+    block-project-ssh-keys  = "TRUE"
+    serial-port-enable      = "FALSE"
+    disable-guest-telemetry = var.enable_ops_agent ? "FALSE" : "TRUE"
   }
   metadata_startup_script = templatefile("${path.module}/startup.sh.tftpl", {
     enable_ops_agent         = var.enable_ops_agent

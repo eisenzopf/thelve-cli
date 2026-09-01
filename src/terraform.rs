@@ -573,6 +573,28 @@ mod tests {
     }
 
     #[test]
+    fn gcp_local_observability_disables_guest_cloud_export() {
+        let startup = GCP_MODULE
+            .get_file("startup.sh.tftpl")
+            .and_then(|file| file.contents_utf8())
+            .unwrap();
+        let module = GCP_MODULE
+            .get_file("main.tf")
+            .and_then(|file| file.contents_utf8())
+            .unwrap();
+
+        assert!(startup.contains("%{ if !enable_ops_agent ~}"));
+        assert!(startup.contains("cloud_logging_enabled = false"));
+        assert!(startup.contains("systemctl restart google-guest-agent-manager.service"));
+        assert!(
+            module
+                .contains("disable-guest-telemetry = var.enable_ops_agent ? \"FALSE\" : \"TRUE\"")
+        );
+        assert!(module.contains("for_each = var.enable_ops_agent ? toset(["));
+        assert!(module.contains("\"roles/logging.logWriter\""));
+    }
+
+    #[test]
     fn workspace_keeps_one_backend_declaration_and_removes_legacy_duplicate() {
         let temporary = tempfile::tempdir().unwrap();
         let config_path = temporary.path().join("deployment.yaml");
