@@ -26,9 +26,15 @@ const MAX_NODE_CONFIG_BYTES: u64 = 1024 * 1024;
 const ARTIFACT_REGISTRY_READER_ROLE: &str = "roles/artifactregistry.reader";
 const GCP_SSH_READY_ATTEMPTS: u8 = 24;
 const GCP_SSH_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
-const GCP_ACTIVATION_TRANSFER_ATTEMPTS: u8 = 6;
+// IAP can accept a TCP tunnel while the backend still fails to deliver an SSH
+// banner. A clean GCE host rehearsal required more than six attempts across
+// successive sessions even though the guest, firewall, IAM, and sshd were all
+// healthy. Keep this bounded and retry only errors proven to occur before an
+// SSH session exists; application commands are never replayed after uncertain
+// execution.
+const GCP_ACTIVATION_TRANSFER_ATTEMPTS: u8 = 12;
 const GCP_ACTIVATION_TRANSFER_RETRY_DELAY: Duration = Duration::from_secs(5);
-const GCP_REMOTE_COMMAND_ATTEMPTS: u8 = 6;
+const GCP_REMOTE_COMMAND_ATTEMPTS: u8 = 12;
 const GCP_REMOTE_COMMAND_RETRY_DELAY: Duration = Duration::from_secs(5);
 const GCP_ACTIVATION_PREFLIGHT_ATTEMPTS: u8 = 24;
 const GCP_ACTIVATION_PREFLIGHT_RETRY_SECONDS: u8 = 5;
@@ -1001,7 +1007,7 @@ fn digest_hex(value: &str) -> Result<&str> {
     Ok(digest)
 }
 
-fn valid_email(value: &str) -> bool {
+pub(crate) fn valid_email(value: &str) -> bool {
     value.len() <= 254
         && !value.chars().any(char::is_whitespace)
         && value

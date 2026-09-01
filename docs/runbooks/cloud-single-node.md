@@ -134,10 +134,26 @@ remain. Restore failure leaves the new application stopped and retains the
 backup. The current recovery transport is deliberately GCP-first; AWS recovery
 must not be inferred from these commands.
 
-If replacement has already created the fresh VM but a transient IAP transfer
-or a restore safety gate stops the combined command, do not replace the node a
-second time. Activate the same verified target release, then resume only the
-verified restore:
+After Terraform applies the exact VM replacement, the CLI writes a private
+`RECEIPT.pending` checkpoint containing only the verified backup/release,
+non-secret TLS contact, old/new cloud identities, and exact-plan evidence. If a
+transient IAP transfer or restore safety gate stops the combined command, rerun
+the exact same `replace-node` command. The CLI re-verifies the signed release,
+backup, checkpoint, and current VM/disk plus retained-resource identities, then
+resumes activation and restore without applying Terraform or replacing compute
+again. A mismatched deployment, backup, release, VM, disk, address, network,
+identity, secret-container inventory, or backup bucket fails closed.
+
+IAP staging, transfer, and remote-command setup each tolerate up to twelve
+bounded pre-session failures. Only failures proven to occur before an SSH
+session exists are retried; an application command with uncertain execution is
+never replayed automatically. On successful activation and restore, the CLI
+writes the final replacement receipt and removes the pending checkpoint.
+
+CLI releases before `v0.1.8` do not create this checkpoint. If one of those
+older releases has already created the fresh VM, do not invoke `replace-node`
+again. Activate the same verified target release, then resume only the verified
+restore:
 
 ```sh
 thelve deploy activate-gcp --config deployment.yaml \

@@ -1,7 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::Write as _,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[cfg(unix)]
@@ -22,6 +22,7 @@ use crate::{
 
 const BACKUP_SCHEMA: &str = "thelve.single-node-backup/v1";
 const RESTORE_SCHEMA: &str = "thelve.single-node-restore/v1";
+const REPLACEMENT_CHECKPOINT_SCHEMA: &str = "thelve.gcp-node-replacement-checkpoint/v1";
 const MAX_RECEIPT_BYTES: usize = 1024 * 1024;
 
 pub fn create_backup(config_path: &Path, release_root: &Path, output: &Path) -> Result<()> {
@@ -92,40 +93,101 @@ pub fn replace_gcp_node(
     if receipt_path.exists() {
         bail!("refusing to overwrite existing {}", receipt_path.display());
     }
+    let checkpoint_path = replacement_checkpoint_path(receipt_path);
     let intent = config::load(config_path)?;
     require_gcp(&intent)?;
     let (target_release, _) = preview::verify_fetched(release_root)?;
     ensure_release_project(&intent, &target_release)?;
     let backup = verify_backup(config_path, backup_id)?;
-    let tls_contact_email = activation::capture_gcp_remote(
-        config_path,
-        "sudo awk '$1 == \"contactEmail:\" {print $2; exit}' /etc/thelve/node.yaml",
-        "read non-secret TLS contact from current node",
-    )?;
-    let tls_contact_email = tls_contact_email.trim();
-    if tls_contact_email.is_empty() || tls_contact_email.len() > 254 {
-        bail!("current node has no valid TLS contact email");
-    }
+    let (checkpoint, resumed) = if checkpoint_path.exists() {
+        let checkpoint = read_replacement_checkpoint(&checkpoint_path)?;
+        let current = cloud_identity(config_path, &intent)?;
+        validate_replacement_checkpoint(
+            &checkpoint,
+            &intent.metadata.name,
+            backup_id,
+            &target_release.release,
+            &target_release.deployment_release_sha256,
+            &current,
+        )?;
+        eprintln!(
+            "resuming the already-applied node replacement from {} without replacing compute again",
+            checkpoint_path.display()
+        );
+        (checkpoint, true)
+    } else {
+        let tls_contact_email = activation::capture_gcp_remote(
+            config_path,
+            "sudo awk '$1 == \"contactEmail:\" {print $2; exit}' /etc/thelve/node.yaml",
+            "read non-secret TLS contact from current node",
+        )?;
+        let tls_contact_email = tls_contact_email.trim();
+        if !activation::valid_email(tls_contact_email) {
+            bail!("current node has no valid TLS contact email");
+        }
 
-    let before = cloud_identity(config_path, &intent)?;
-    let applied = terraform::replace_gcp_node(config_path)?;
-    let after = cloud_identity(config_path, &intent)?;
-    validate_replacement_identities(&before, &after, &applied)?;
+        let before = cloud_identity(config_path, &intent)?;
+        let applied = terraform::replace_gcp_node(config_path)?;
+        let after = cloud_identity(config_path, &intent)?;
+        validate_replacement_identities(&before, &after, &applied)?;
+        let checkpoint = json!({
+            "schemaVersion": REPLACEMENT_CHECKPOINT_SCHEMA,
+            "deployment": intent.metadata.name,
+            "backupId": backup_id,
+            "targetRelease": target_release.release,
+            "targetDeploymentReleaseSha256": target_release.deployment_release_sha256,
+            "tlsContactEmail": tls_contact_email,
+            "createdAt": chrono::Utc::now(),
+            "before": before,
+            "after": after,
+            "terraform": applied,
+            "secretValuesRecorded": false
+        });
+        create_private(&checkpoint_path, &serde_json::to_vec_pretty(&checkpoint)?)?;
+        (checkpoint, false)
+    };
 
-    let working = tempdir().context("create private replacement workspace")?;
-    let node_config = working.path().join("node.yaml");
-    let activation_receipt = working.path().join("activation-receipt.json");
-    activation::render_node_config(config_path, release_root, &node_config, tls_contact_email)?;
-    activation::activate_gcp(config_path, release_root, &node_config, &activation_receipt)?;
+    let tls_contact_email = checkpoint
+        .get("tlsContactEmail")
+        .and_then(Value::as_str)
+        .context("replacement checkpoint is missing the TLS contact email")?;
+    let before = checkpoint
+        .get("before")
+        .cloned()
+        .context("replacement checkpoint is missing the prior cloud identity")?;
+    let after = checkpoint
+        .get("after")
+        .cloned()
+        .context("replacement checkpoint is missing the replacement cloud identity")?;
+    let applied = checkpoint
+        .get("terraform")
+        .cloned()
+        .context("replacement checkpoint is missing Terraform evidence")?;
 
-    let restore = restore_on_active_node(
-        config_path,
-        backup_id,
-        &target_release.deployment_release_sha256,
-    )?;
-    let activation: Value =
-        serde_json::from_slice(&fs::read(&activation_receipt).context("read activation receipt")?)
-            .context("parse activation receipt")?;
+    let completion = (|| -> Result<(Value, Value)> {
+        let working = tempdir().context("create private replacement workspace")?;
+        let node_config = working.path().join("node.yaml");
+        let activation_receipt = working.path().join("activation-receipt.json");
+        activation::render_node_config(config_path, release_root, &node_config, tls_contact_email)?;
+        activation::activate_gcp(config_path, release_root, &node_config, &activation_receipt)?;
+
+        let restore = restore_on_active_node(
+            config_path,
+            backup_id,
+            &target_release.deployment_release_sha256,
+        )?;
+        let activation: Value = serde_json::from_slice(
+            &fs::read(&activation_receipt).context("read activation receipt")?,
+        )
+        .context("parse activation receipt")?;
+        Ok((activation, restore))
+    })();
+    let (activation, restore) = completion.map_err(|error| {
+        error.context(format!(
+            "replacement checkpoint {} was retained; rerun the exact replace-node command to resume without replacing compute again",
+            checkpoint_path.display()
+        ))
+    })?;
     let completed_at = chrono::Utc::now();
     let receipt = json!({
         "schemaVersion": "thelve.gcp-node-replacement/v1",
@@ -148,6 +210,7 @@ pub fn replace_gcp_node(
             "secretValuesRecorded": false
         },
         "restore": restore,
+        "orchestrationResumed": resumed,
         "staticAddressRetained": true,
         "networkRetained": true,
         "backupBucketRetained": true,
@@ -157,10 +220,100 @@ pub fn replace_gcp_node(
         "secretValuesRecorded": false
     });
     create_private(receipt_path, &serde_json::to_vec_pretty(&receipt)?)?;
+    if let Err(error) = fs::remove_file(&checkpoint_path) {
+        eprintln!(
+            "warning: replacement completed but stale checkpoint {} could not be removed: {error}",
+            checkpoint_path.display()
+        );
+    }
     println!(
         "replacement node restored and ready; receipt written to {}",
         receipt_path.display()
     );
+    Ok(())
+}
+
+fn replacement_checkpoint_path(receipt_path: &Path) -> PathBuf {
+    let mut value = receipt_path.as_os_str().to_os_string();
+    value.push(".pending");
+    PathBuf::from(value)
+}
+
+fn read_replacement_checkpoint(path: &Path) -> Result<Value> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("inspect replacement checkpoint {}", path.display()))?;
+    if !metadata.file_type().is_file()
+        || metadata.len() == 0
+        || metadata.len() > MAX_RECEIPT_BYTES as u64
+    {
+        bail!("replacement checkpoint is not a bounded regular file");
+    }
+    let bytes = fs::read(path)
+        .with_context(|| format!("read replacement checkpoint {}", path.display()))?;
+    serde_json::from_slice(&bytes).context("parse replacement checkpoint")
+}
+
+fn validate_replacement_checkpoint(
+    checkpoint: &Value,
+    deployment: &str,
+    backup_id: Uuid,
+    target_release: &str,
+    target_deployment_release_sha256: &str,
+    current: &Value,
+) -> Result<()> {
+    let backup_id_string = backup_id.to_string();
+    let valid_header = checkpoint.get("schemaVersion").and_then(Value::as_str)
+        == Some(REPLACEMENT_CHECKPOINT_SCHEMA)
+        && checkpoint.get("deployment").and_then(Value::as_str) == Some(deployment)
+        && checkpoint.get("backupId").and_then(Value::as_str) == Some(backup_id_string.as_str())
+        && checkpoint.get("targetRelease").and_then(Value::as_str) == Some(target_release)
+        && checkpoint
+            .get("targetDeploymentReleaseSha256")
+            .and_then(Value::as_str)
+            == Some(target_deployment_release_sha256)
+        && checkpoint
+            .get("secretValuesRecorded")
+            .and_then(Value::as_bool)
+            == Some(false)
+        && checkpoint
+            .get("tlsContactEmail")
+            .and_then(Value::as_str)
+            .is_some_and(activation::valid_email);
+    if !valid_header {
+        bail!("replacement checkpoint does not match this deployment, backup, and release");
+    }
+    let before = checkpoint
+        .get("before")
+        .context("replacement checkpoint is missing prior cloud identity")?;
+    let after = checkpoint
+        .get("after")
+        .context("replacement checkpoint is missing replacement cloud identity")?;
+    let applied = checkpoint
+        .get("terraform")
+        .context("replacement checkpoint is missing Terraform evidence")?;
+    validate_replacement_identities(before, after, applied)?;
+    for field in [
+        "instanceId",
+        "bootDiskId",
+        "instanceName",
+        "publicIp",
+        "staticAddressId",
+        "networkId",
+        "subnetworkId",
+        "backupBucket",
+        "backupBucketIdentity",
+        "runtimeServiceAccount",
+        "secretResources",
+        "stateBucket",
+        "statePrefix",
+    ] {
+        if after.get(field) != current.get(field) {
+            bail!("current cloud identity {field:?} does not match the pending replacement");
+        }
+    }
+    if current.get("instanceStatus").and_then(Value::as_str) != Some("RUNNING") {
+        bail!("pending replacement node must be running before orchestration can resume");
+    }
     Ok(())
 }
 
@@ -536,6 +689,87 @@ mod tests {
         let mut wrong = after;
         wrong["publicIp"] = "203.0.113.9".into();
         assert!(validate_replacement_identities(&before, &wrong, &applied).is_err());
+    }
+
+    #[test]
+    fn replacement_checkpoint_resumes_only_the_exact_applied_replacement() {
+        let backup_id = Uuid::parse_str("223e4567-e89b-42d3-a456-426614174000").unwrap();
+        let before = json!({
+            "instanceId":"1", "bootDiskId":"2", "instanceName":"node",
+            "instanceStatus":"RUNNING", "publicIp":"203.0.113.2", "staticAddressId":"ip",
+            "networkId":"net", "subnetworkId":"subnet", "backupBucket":"backup",
+            "backupBucketIdentity":{"name":"backup"}, "runtimeServiceAccount":"node@example.test",
+            "secretResources":{"a":"a"}, "stateBucket":"state", "statePrefix":"prefix",
+            "secretValuesRecorded":false
+        });
+        let after = json!({
+            "instanceId":"3", "bootDiskId":"4", "instanceName":"node",
+            "instanceStatus":"RUNNING", "publicIp":"203.0.113.2", "staticAddressId":"ip",
+            "networkId":"net", "subnetworkId":"subnet", "backupBucket":"backup",
+            "backupBucketIdentity":{"name":"backup"}, "runtimeServiceAccount":"node@example.test",
+            "secretResources":{"a":"a"}, "stateBucket":"state", "statePrefix":"prefix",
+            "secretValuesRecorded":false
+        });
+        let release_sha = format!("sha256:{}", "b".repeat(64));
+        let checkpoint = json!({
+            "schemaVersion":REPLACEMENT_CHECKPOINT_SCHEMA,
+            "deployment":"preview",
+            "backupId":backup_id,
+            "targetRelease":"0.1.0-preview.47",
+            "targetDeploymentReleaseSha256":release_sha,
+            "tlsContactEmail":"operator@example.test",
+            "before":before,
+            "after":after,
+            "terraform":{"exactResourceReplacement":true},
+            "secretValuesRecorded":false
+        });
+        assert!(
+            validate_replacement_checkpoint(
+                &checkpoint,
+                "preview",
+                backup_id,
+                "0.1.0-preview.47",
+                &release_sha,
+                &after,
+            )
+            .is_ok()
+        );
+
+        let mut wrong_node = after.clone();
+        wrong_node["instanceId"] = "5".into();
+        assert!(
+            validate_replacement_checkpoint(
+                &checkpoint,
+                "preview",
+                backup_id,
+                "0.1.0-preview.47",
+                &release_sha,
+                &wrong_node,
+            )
+            .is_err()
+        );
+
+        let mut unsafe_checkpoint = checkpoint;
+        unsafe_checkpoint["secretValuesRecorded"] = true.into();
+        assert!(
+            validate_replacement_checkpoint(
+                &unsafe_checkpoint,
+                "preview",
+                backup_id,
+                "0.1.0-preview.47",
+                &release_sha,
+                &after,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn replacement_checkpoint_uses_a_distinct_sibling_path() {
+        assert_eq!(
+            replacement_checkpoint_path(Path::new("receipts/replacement.json")),
+            PathBuf::from("receipts/replacement.json.pending")
+        );
     }
 
     #[test]
