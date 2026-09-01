@@ -28,6 +28,8 @@ const GCP_SSH_READY_ATTEMPTS: u8 = 24;
 const GCP_SSH_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
 const GCP_ACTIVATION_TRANSFER_ATTEMPTS: u8 = 6;
 const GCP_ACTIVATION_TRANSFER_RETRY_DELAY: Duration = Duration::from_secs(5);
+const GCP_REMOTE_COMMAND_ATTEMPTS: u8 = 6;
+const GCP_REMOTE_COMMAND_RETRY_DELAY: Duration = Duration::from_secs(5);
 const GCP_ACTIVATION_PREFLIGHT_ATTEMPTS: u8 = 24;
 const GCP_ACTIVATION_PREFLIGHT_RETRY_SECONDS: u8 = 5;
 
@@ -372,7 +374,9 @@ pub fn activate_gcp(
             &config_sha,
             &registry.host,
         );
-        let output = process::capture_named(&ssh_base(remote_command), "remote GCP activation")?;
+        let output = retry_gcp_pre_session_capture("remote GCP activation", || {
+            process::capture_named(&ssh_base(remote_command.clone()), "remote GCP activation")
+        })?;
         let mut receipt: Value =
             serde_json::from_str(&output).context("remote activation receipt is not JSON")?;
         if !valid_gcp_activation_receipt(&receipt, &registry.host) {
@@ -397,9 +401,15 @@ pub fn activate_gcp(
         );
         Ok(())
     })();
-    let _ = process::inherit(&ssh_base(format!(
+    let cleanup_command = format!(
         "set -eu; case {remote_stage} in /tmp/thelve-activation-*) rm -rf -- {remote_stage} ;; *) exit 1 ;; esac"
-    )));
+    );
+    let _ = retry_gcp_pre_session_capture("remove the remote activation stage", || {
+        process::capture_named(
+            &ssh_base(cleanup_command.clone()),
+            "remove the remote activation stage",
+        )
+    });
     result
 }
 
@@ -553,10 +563,13 @@ pub(crate) fn capture_gcp_remote(
         bail!("GCP node must be running for {label}");
     }
     wait_for_gcp_ssh(instance, project_id, zone)?;
-    process::capture_named(
-        &gcp_activation_ssh_plan(instance, project_id, zone, command),
-        label,
-    )
+    let command = command.into();
+    retry_gcp_pre_session_capture(label, || {
+        process::capture_named(
+            &gcp_activation_ssh_plan(instance, project_id, zone, command.clone()),
+            label,
+        )
+    })
 }
 
 fn retry_until_ready<F, W>(attempts: u8, delay: Duration, mut probe: F, mut wait: W) -> Result<u8>
@@ -598,6 +611,66 @@ where
             "{label} failed after {GCP_ACTIVATION_TRANSFER_ATTEMPTS} bounded attempts"
         )
     })
+}
+
+fn retry_gcp_pre_session_capture<F>(label: &str, operation: F) -> Result<String>
+where
+    F: FnMut() -> Result<String>,
+{
+    retry_gcp_pre_session_capture_with(
+        GCP_REMOTE_COMMAND_ATTEMPTS,
+        GCP_REMOTE_COMMAND_RETRY_DELAY,
+        label,
+        operation,
+        |attempt, delay| {
+            eprintln!(
+                "{label} could not establish an IAP/SSH session (attempt {attempt}/{GCP_REMOTE_COMMAND_ATTEMPTS}); retrying in {} seconds",
+                delay.as_secs()
+            );
+            thread::sleep(delay);
+        },
+    )
+}
+
+fn retry_gcp_pre_session_capture_with<F, W>(
+    attempts: u8,
+    delay: Duration,
+    label: &str,
+    mut operation: F,
+    mut wait: W,
+) -> Result<String>
+where
+    F: FnMut() -> Result<String>,
+    W: FnMut(u8, Duration),
+{
+    if attempts == 0 {
+        bail!("remote command retry policy must include at least one attempt");
+    }
+    for attempt in 1..=attempts {
+        match operation() {
+            Ok(output) => return Ok(output),
+            Err(error) if !is_gcp_pre_session_failure(&error) => return Err(error),
+            Err(error) if attempt == attempts => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "{label} failed to establish an IAP/SSH session after {attempts} attempts"
+                    )
+                });
+            }
+            Err(_) => wait(attempt, delay),
+        }
+    }
+    unreachable!("a positive bounded retry loop always returns")
+}
+
+fn is_gcp_pre_session_failure(error: &anyhow::Error) -> bool {
+    let detail = format!("{error:#}").to_ascii_lowercase();
+    detail.contains("connection timed out during banner exchange")
+        || detail.contains("failed to connect to backend")
+        || detail.contains("failed to connect to port 22")
+        || detail.contains("connection refused")
+        || (detail.contains("kex_exchange_identification")
+            && detail.contains("connection reset by peer"))
 }
 
 fn remote_stage_prepare_command(remote_stage: &str) -> String {
@@ -1328,5 +1401,79 @@ mod tests {
             retry_until_ready(2, Duration::ZERO, || bail!("still booting"), |_, _| {}).unwrap_err();
         assert_eq!(error.to_string(), "still booting");
         assert!(retry_until_ready(0, Duration::ZERO, || Ok(()), |_, _| {}).is_err());
+    }
+
+    #[test]
+    fn remote_command_retry_accepts_only_pre_session_transport_failures() {
+        for detail in [
+            "Connection timed out during banner exchange",
+            "Error while connecting [4003: failed to connect to backend]",
+            "Failed to connect to port 22",
+            "connect: Connection refused",
+            "kex_exchange_identification: read: Connection reset by peer",
+        ] {
+            assert!(is_gcp_pre_session_failure(&anyhow::anyhow!(detail)));
+        }
+        for detail in [
+            "remote GCP activation failed: Thelve activation failed at stage install-release",
+            "Permission denied (publickey)",
+            "Connection reset by peer after command output",
+        ] {
+            assert!(!is_gcp_pre_session_failure(&anyhow::anyhow!(detail)));
+        }
+    }
+
+    #[test]
+    fn remote_command_retry_stops_after_transport_recovers() {
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        let output = retry_gcp_pre_session_capture_with(
+            4,
+            Duration::from_secs(5),
+            "remote test",
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    bail!("Connection timed out during banner exchange")
+                }
+                Ok("receipt".into())
+            },
+            |attempt, delay| waits.push((attempt, delay)),
+        )
+        .unwrap();
+        assert_eq!(output, "receipt");
+        assert_eq!(attempts, 3);
+        assert_eq!(
+            waits,
+            vec![(1, Duration::from_secs(5)), (2, Duration::from_secs(5))]
+        );
+    }
+
+    #[test]
+    fn remote_command_retry_never_replays_application_failures() {
+        let mut attempts = 0;
+        let error = retry_gcp_pre_session_capture_with(
+            6,
+            Duration::ZERO,
+            "remote test",
+            || {
+                attempts += 1;
+                bail!("Thelve activation failed at stage install-release")
+            },
+            |_, _| panic!("application failures must not be retried"),
+        )
+        .unwrap_err();
+        assert_eq!(attempts, 1);
+        assert!(error.to_string().contains("install-release"));
+        assert!(
+            retry_gcp_pre_session_capture_with(
+                0,
+                Duration::ZERO,
+                "remote test",
+                || Ok(String::new()),
+                |_, _| {}
+            )
+            .is_err()
+        );
     }
 }

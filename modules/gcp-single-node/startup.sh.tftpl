@@ -7,7 +7,7 @@ if [ -f "$receipt" ]; then
   exit 0
 fi
 
-for command in docker containerd chronyd nft jq curl sha256sum awk mktemp; do
+for command in docker containerd chronyd nft jq curl sha256sum awk stat; do
   command -v "$command" >/dev/null
 done
 docker compose version >/dev/null
@@ -15,54 +15,33 @@ test -x /usr/local/libexec/thelve-image-qualification
 /usr/local/libexec/thelve-image-qualification >/dev/null
 
 %{ if !enable_ops_agent ~}
-# Google enables guest-agent Cloud Logging by default. A deployment whose
-# observability export is explicitly "none" must disable that path instead of
-# granting an unused logging writer role or continuously emitting denied API
-# calls. Keep the agent's local journal output; only its cloud export changes.
+# The qualified GCP host must disable guest-agent Cloud Logging before its first
+# boot. Changing this setting from a metadata startup script restarts the guest
+# agent while OS Login/IAP is coming online and permits an initial denied export.
+# Fail closed if an unqualified image reaches this deployment target.
+# Required image state: cloud_logging_enabled = false
 guest_agent_config=/etc/default/instance_configs.cfg
-guest_agent_config_tmp=$(mktemp /etc/default/instance_configs.cfg.thelve.XXXXXX)
-if [ ! -e "$guest_agent_config" ]; then
-  install -m 0644 /dev/null "$guest_agent_config"
-fi
-awk '
-  BEGIN { in_core = 0; core_seen = 0; option_seen = 0 }
+test -f "$guest_agent_config"
+test ! -L "$guest_agent_config"
+test "$(stat -c '%U:%G:%a' "$guest_agent_config")" = root:root:644
+test "$(awk -F= '
+  BEGIN { in_core = 0; matches = 0 }
   /^\[Core\][[:space:]]*$/ {
     in_core = 1
-    core_seen = 1
-    print
     next
   }
   /^\[/ {
-    if (in_core && !option_seen) {
-      print "cloud_logging_enabled = false"
-      option_seen = 1
-    }
     in_core = 0
   }
-  {
-    if (in_core && $0 ~ /^[[:space:]]*cloud_logging_enabled[[:space:]]*=/) {
-      if (!option_seen) {
-        print "cloud_logging_enabled = false"
-      }
-      option_seen = 1
-      next
-    }
-    print
+  in_core && $1 ~ /^[[:space:]]*cloud_logging_enabled[[:space:]]*$/ {
+    value = $2
+    gsub(/[[:space:]]/, "", value)
+    if (value == "false") matches++
   }
   END {
-    if (in_core && !option_seen) {
-      print "cloud_logging_enabled = false"
-    } else if (!core_seen) {
-      print ""
-      print "[Core]"
-      print "cloud_logging_enabled = false"
-    }
+    if (matches == 1) print "false"
   }
-' "$guest_agent_config" > "$guest_agent_config_tmp"
-chown root:root "$guest_agent_config_tmp"
-chmod 0644 "$guest_agent_config_tmp"
-mv "$guest_agent_config_tmp" "$guest_agent_config"
-systemctl restart google-guest-agent-manager.service
+' "$guest_agent_config")" = false
 %{ endif ~}
 
 # The privileged host materializer needs workload identity, but application
@@ -101,6 +80,7 @@ ExecStart=/usr/sbin/nft --file /etc/thelve/metadata-guard.nft
 [Install]
 WantedBy=multi-user.target
 EOF
+chmod 0644 /etc/systemd/system/thelve-metadata-guard.service
 systemctl daemon-reload
 systemctl enable --now thelve-metadata-guard.service
 

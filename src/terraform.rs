@@ -585,7 +585,10 @@ mod tests {
 
         assert!(startup.contains("%{ if !enable_ops_agent ~}"));
         assert!(startup.contains("cloud_logging_enabled = false"));
-        assert!(startup.contains("systemctl restart google-guest-agent-manager.service"));
+        assert!(startup.contains("qualified GCP host must disable guest-agent Cloud Logging"));
+        assert!(startup.contains("stat -c '%U:%G:%a'"));
+        assert!(!startup.contains("systemctl restart google-guest-agent-manager.service"));
+        assert!(startup.contains("chmod 0644 /etc/systemd/system/thelve-metadata-guard.service"));
         assert!(
             module
                 .contains("disable-guest-telemetry = var.enable_ops_agent ? \"FALSE\" : \"TRUE\"")
