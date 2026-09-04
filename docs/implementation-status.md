@@ -1,9 +1,10 @@
 # Thelve CLI implementation status
 
 Overall status: **Partial — provider-neutral outbound and GCP recovery contracts
-are implemented and signed CLI `v0.1.5` is public; residual-runtime recovery is
-hardened, while final clean-node restore and live outbound acceptance remain**
-· Updated 2026-08-31
+are implemented, signed CLI `v0.1.6` is public, and an exact clean-node restore
+has passed; the hardened local-only GCP observability profile is publishing for
+one more node rehearsal, while live outbound acceptance remains** · Updated
+2026-08-31
 
 ## Implemented
 
@@ -61,6 +62,12 @@ hardened, while final clean-node restore and live outbound acceptance remain**
   `null` readiness value.
 - Optional provider-native log agents are disabled by default and admitted only
   with an immutable HTTPS package URL plus lowercase SHA-256.
+- The GCP local-only observability profile now explicitly disables guest-agent
+  Cloud Logging and guest telemetry instead of granting unused writer roles or
+  continuously emitting denied API calls. Enabling the Ops Agent retains the
+  existing conditional Logging Writer and Monitoring Metric Writer roles. A
+  dedicated regression plus Terraform/template and cross-repository drift gates
+  bind both branches to the same public embedded module.
 - Independently pinned trust-root digest plus JSON Schema checks for the root
   and signature envelope, followed by Ed25519 signature, document digest,
   active-key, document-kind, and embedded schema verification for channel,
@@ -113,7 +120,7 @@ hardened, while final clean-node restore and live outbound acceptance remain**
   was discovered and fixed during the first real image qualification.
 - CI gates for formatting, clippy, unit tests, Terraform validation, contract
   fixtures, compiled release archives, checksums, signatures, and provenance.
-- All 44 CLI tests pass with outbound-capacity, SIP-egress-secret, exact
+- All 45 CLI tests pass with outbound-capacity, SIP-egress-secret, exact
   replacement coverage; final strict Clippy and release-workflow validation
   are rerun before publication.
 - Public repository `https://github.com/eisenzopf/thelve-cli` hosts `main`; its
@@ -149,6 +156,24 @@ hardened, while final clean-node restore and live outbound acceptance remain**
   `sha256:f80067882277130402b36d35a8da9c09f8c4f34c9f24425ae8df19bb29c4f690`;
   the installed Apple Silicon binary is checksum- and attestation-verified at
   `sha256:ce5accb5794f2844f12b0f4836278228028def18f804a4e32c2b5517ae0fd348`.
+- Public release `v0.1.6` is bound to commit
+  `9b4587753124bf56cb1ee95ada95709ffdab2bc5`. Hosted verification run
+  `33466644620` passed Rust, both Terraform modules, and the no-secret gate;
+  protected release run `33466650748` passed all Linux, Intel macOS, and Apple
+  Silicon build, test, keyless-signing, provenance, and publication jobs. The
+  independently checksum- and provenance-verified Linux qualification binary
+  is `sha256:4f65bd01371c1c4cf49bffe0f225f08694290f416d06839a2c2d0b8553e03308`;
+  the installed Apple Silicon binary is
+  `sha256:5b2e9ce4babbc054de532cdd3b26d4872aad64fc98c2da827008545926ef15a7`.
+- The released exact-node workflow has now completed against the retained GCP
+  deployment. It replaced only the GCE instance and auto-deleting boot disk,
+  changed instance identity `6166252024103462821` to `3259657022777064453`
+  and disk identity `6340953216187393957` to `1957598684396649477`, activated
+  signed Preview 45, restored verified backup
+  `75d4f6e2-6325-415b-8c91-1a8f0d001481`, applied migrations, and returned a
+  ready gateway. Static IP `34.168.66.188`, network, runtime identity, backup
+  bucket, and all 15 secret containers remained unchanged; no secret value or
+  Redis cache entered the receipt.
 - Protected local Ed25519 AAuth profiles, HTTPS-only remote clients, RFC
   9421-style signed envelopes, live capability discovery, guarded reads,
   exact-payload configuration plans, approved-plan verification, and apply.
@@ -174,11 +199,9 @@ hardened, while final clean-node restore and live outbound acceptance remain**
 - Verify channel-to-release linkage, freshness/rollback state, catalog
   revocation, CLI-version compatibility, and provider/region image selection as
   a single transaction.
-- Activate the final clock- and recovery-hardened GCP release and retain
-  browser/WebRTC/call evidence; implement equivalent AWS SSM transport and
+- Activate the guest-telemetry-hardened GCP release and retain its clean serial,
+  browser/WebRTC, and call evidence; implement equivalent AWS SSM transport and
   activation.
-- Execute the implemented GCP backup/restore and exact node-replacement path on
-  the retained preview deployment and preserve its redacted receipts.
 - Add release list/select, logs, upgrade/rollback, support bundle, capacity
   change, and governed inbound-test commands; add AWS backup/restore parity.
 - Run clean-workstation GCP and AWS apply/security/recovery/cleanup receipts.
