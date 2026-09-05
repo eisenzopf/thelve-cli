@@ -100,8 +100,14 @@ pub fn render_node_config(
         "kind": "SingleNode",
         "metadata": {"name": intent.metadata.name},
         "spec": {
-            "deploymentTarget": "cloud_dedicated",
+            // A customer-owned cloud project is the "private cloud" option:
+            // private_connected hosted on gcp or aws.
+            "deploymentTarget": "private_connected",
             "deploymentShape": "single_node",
+            "hosting": match intent.spec.provider.kind() {
+                crate::config::CloudProvider::Gcp => "gcp",
+                crate::config::CloudProvider::Aws => "aws",
+            },
             "computeProfile": intent.spec.compute_profile,
             "releaseRef": receipt.deployment_release_sha256,
             "capacity": {
@@ -121,6 +127,7 @@ pub fn render_node_config(
             "backup": {"destinationRef": "secret://backup/destination", "schedule": "0 3 * * *"},
             "observability": observability,
             "security": {"manageHostFirewall": false},
+            "licensing": {"trustedIssuers": intent.spec.licensing.trusted_issuers},
             "secretBindings": secret_bindings
         }
     });

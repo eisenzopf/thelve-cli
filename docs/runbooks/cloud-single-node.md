@@ -47,6 +47,35 @@ thelve release fetch-gcp-preview \
   --output verified-preview --admit-preview
 ```
 
+## One-command launch
+
+`thelve launch` is the GCP sequence below composed into one resumable
+command. It takes as arguments what the sequence has the operator edit into
+`deployment.yaml` by hand, runs each step in the runbook's order under the
+same `--approve` gate, and records each completed step in
+`launch-receipt.json`; a stopped launch rerun with the same arguments resumes
+at the first incomplete step and never re-applies a completed one. The two
+Telnyx values are still typed at hidden prompts.
+
+```sh
+thelve launch --provider gcp --name thelve-test \
+  --project PROJECT_ID --region us-west1 --zone us-west1-b \
+  --host-image projects/PROJECT_ID/global/images/IMAGE_FROM_VERIFIED_CATALOG \
+  --state-bucket UNIQUE-STATE-BUCKET \
+  --domain app=desk.example.com --domain api=api.example.com \
+  --domain media=media.example.com --domain sip=sip.example.com \
+  --tls-contact-email operator@example.com \
+  --release-dir verified-preview \
+  --issuer-url https://licenses.rudeless.ai \
+  --approve
+```
+
+It ends with `deploy status` and the next steps: open the app domain and
+complete the setup checklist (first administrator, sign-in, telephony,
+licence), and paste the issuer's certificate under Platform admin →
+Installation. On AWS the launch stops after `up` with the node configuration
+rendered, because activation is GCP-only today.
+
 ## GCP sequence
 
 ```sh
@@ -208,6 +237,58 @@ thelve deploy status --config deployment.yaml
 For AWS-managed DNS, set `provider.route53ZoneId` and all four domain keys
 before planning. Set `provider.cloudwatchAgentPackage` only with a reviewed
 immutable HTTPS package and SHA-256.
+
+## Licence
+
+An appliance runs `legacy_unmanaged` — every module readable, nothing
+commercially bounded — until a signed entitlement certificate is installed.
+Two steps, both value-free on the workstation:
+
+1. Before `render-node-config`, record which issuer the appliance trusts.
+   `thelve license trust` fetches the issuer's published Ed25519 public keys
+   and prints them as the `licensing` block for `deployment.yaml`; the render
+   projects it into the control API's trust anchors. An appliance with an
+   empty `licensing.trustedIssuers` cannot install any certificate.
+
+   ```sh
+   thelve license trust --issuer-url https://licenses.rudeless.ai
+   ```
+
+2. After activation and the first administrator's enrolment, install the
+   certificate the issuer produced for this installation through a bound
+   AAuth profile. The call enrols the tenant with the certificate's issuer
+   on first use and ingests the certificate with the usual anti-rollback and
+   exact-replay rules; the same file installs idempotently.
+
+   ```sh
+   thelve license install --profile thelve-test --certificate licence.json
+   ```
+
+The certificate names product suites expanded into component grants by the
+issuer; Tenant Admin → Entitlement shows each suite's coverage. A lapsed
+certificate drops the granted modules to read-only rather than removing data.
+
+## Upgrade, rollback, and support
+
+An upgrade is `deploy activate-gcp` with the newer verified release: the
+node manager's install is convergent and hash-chains its receipt after the
+previous one, so the node's own ledger records the step. To go back:
+
+```sh
+thelve deploy support-bundle --config deployment.yaml --output support-bundle.json
+thelve deploy rollback --config deployment.yaml \
+  --to INSTALLED_RELEASE_ID --receipt rollback-receipt.json --approve
+```
+
+The support bundle lists every installed release with its id (the release id
+plus the install-intent suffix) and which one is current, the verified
+receipt chain, readiness, and the last two hours of the service journal; it
+carries no runtime settings or secret files and attests
+`secretValuesRecorded: false`. Rollback re-verifies the target's bundle
+against the node's trust store, refuses if the node configuration has changed
+since that release was installed (install the release instead), reinstalls
+the target's node artifacts, moves the `current` pointer, appends a
+`rollback` receipt to the chain, and restarts the service.
 
 ## Pause, resume, and cleanup
 

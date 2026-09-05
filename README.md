@@ -42,6 +42,11 @@ remote inputs verified by digest and signature.
 - packaged, validated `thelve-admin` and `thelve-cloud` skills installable for
   Codex, Claude, or both
 
+- issuer trust capture and one-step licence installation on a deployed
+  appliance: `thelve license trust`, `thelve license install`
+- the whole GCP sequence as one resumable, receipt-recorded command:
+  `thelve launch`
+
 The application release publication, machine-image catalog publication, and
 live Telnyx acceptance receipts are external release gates and are not faked by
 this repository.

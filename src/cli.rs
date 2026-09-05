@@ -5,7 +5,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
 
 use crate::{
-    activation, agent, catalog, cloud, config, mcp, preview, recovery, secrets, skills, terraform,
+    activation, agent, catalog, cloud, config, launch, license, lifecycle, mcp, preview, recovery,
+    secrets, skills, terraform,
 };
 
 #[derive(Debug, Parser)]
@@ -34,6 +35,89 @@ enum Command {
     Mcp(McpArgs),
     /// Install the portable Thelve skills for Codex and Claude.
     Skill(SkillArgs),
+    /// Obtain issuer trust and install a signed licence on a deployed appliance.
+    License(LicenseArgs),
+    /// Bring up a single-server appliance from a clean workstation in one resumable command.
+    Launch(Box<LaunchArgs>),
+}
+
+#[derive(Debug, Args)]
+struct LaunchArgs {
+    #[arg(long, value_enum)]
+    provider: config::CloudProvider,
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    project: Option<String>,
+    #[arg(long)]
+    region: String,
+    #[arg(long)]
+    zone: String,
+    /// Exact host image from a verified machine-image catalog.
+    #[arg(long)]
+    host_image: String,
+    /// Globally unique remote-state bucket.
+    #[arg(long)]
+    state_bucket: String,
+    /// Domain assignments as key=host, e.g. app=desk.example.com; repeat for app, api, media, sip.
+    #[arg(long = "domain", value_parser = parse_domain)]
+    domains: Vec<(String, String)>,
+    /// Real operator address for ACME notices.
+    #[arg(long)]
+    tls_contact_email: String,
+    /// Verified release directory from `thelve release fetch-gcp-preview`.
+    #[arg(long)]
+    release_dir: PathBuf,
+    /// Entitlement issuer whose published trust the appliance accepts (`thelve license trust`).
+    #[arg(long)]
+    issuer_url: Option<String>,
+    #[arg(long, default_value = "deployment.yaml")]
+    config: PathBuf,
+    #[arg(long, default_value = "node.yaml")]
+    node_config: PathBuf,
+    #[arg(long, default_value = "activation-receipt.json")]
+    activation_receipt: PathBuf,
+    #[arg(long, default_value = "launch-receipt.json")]
+    receipt: PathBuf,
+    #[arg(long)]
+    approve: bool,
+}
+
+fn parse_domain(value: &str) -> Result<(String, String), String> {
+    let (key, host) = value
+        .split_once('=')
+        .ok_or_else(|| format!("expected key=host, got {value:?}"))?;
+    if !matches!(key, "app" | "api" | "media" | "sip") || host.is_empty() {
+        return Err(format!(
+            "domain key must be app, api, media, or sip with a host, got {value:?}"
+        ));
+    }
+    Ok((key.into(), host.into()))
+}
+
+#[derive(Debug, Args)]
+struct LicenseArgs {
+    #[command(subcommand)]
+    command: LicenseCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum LicenseCommand {
+    /// Print an issuer's published trust anchors as a `licensing` block for the deployment intent.
+    Trust {
+        #[arg(long)]
+        issuer_url: String,
+    },
+    /// Install a signed entitlement certificate through a bound AAuth profile.
+    Install {
+        #[arg(long)]
+        profile: String,
+        /// Signed certificate JSON file, or - for stdin.
+        #[arg(long, default_value = "-")]
+        certificate: PathBuf,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -369,6 +453,25 @@ enum DeployCommand {
         #[arg(long, default_value = "node.yaml")]
         output: PathBuf,
     },
+    /// Roll a running GCP node back onto a release it already installed; upgrades are `activate-gcp` with the newer release.
+    Rollback {
+        #[arg(long)]
+        config: PathBuf,
+        /// Installed release id as listed in the support bundle.
+        #[arg(long)]
+        to: String,
+        #[arg(long, default_value = "rollback-receipt.json")]
+        receipt: PathBuf,
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Fetch the node manager's value-free support bundle.
+    SupportBundle {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, default_value = "support-bundle.json")]
+        output: PathBuf,
+    },
     /// Transport and activate a verified preview release through GCP IAP/OS Login.
     ActivateGcp {
         #[arg(long)]
@@ -587,6 +690,18 @@ pub fn execute(cli: Cli) -> Result<()> {
                 tls_contact_email,
                 output,
             } => activation::render_node_config(&config, &release_dir, &output, &tls_contact_email),
+            DeployCommand::Rollback {
+                config,
+                to,
+                receipt,
+                approve,
+            } => {
+                require_approval(approve, "rollback")?;
+                lifecycle::rollback(&config, &to, &receipt)
+            }
+            DeployCommand::SupportBundle { config, output } => {
+                lifecycle::support_bundle(&config, &output)
+            }
             DeployCommand::ActivateGcp {
                 config,
                 release_dir,
@@ -670,6 +785,32 @@ pub fn execute(cli: Cli) -> Result<()> {
             }
         },
         Command::Agent(args) => execute_agent(args),
+        Command::Launch(args) => launch::launch(&launch::LaunchRequest {
+            provider: args.provider,
+            name: args.name,
+            project: args.project,
+            region: args.region,
+            zone: args.zone,
+            host_image: args.host_image,
+            state_bucket: args.state_bucket,
+            domains: args.domains.into_iter().collect(),
+            tls_contact_email: args.tls_contact_email,
+            release_dir: args.release_dir,
+            issuer_url: args.issuer_url,
+            config: args.config,
+            node_config: args.node_config,
+            activation_receipt: args.activation_receipt,
+            receipt: args.receipt,
+            approve: args.approve,
+        }),
+        Command::License(args) => match args.command {
+            LicenseCommand::Trust { issuer_url } => print_json(&license::trust(&issuer_url)?),
+            LicenseCommand::Install {
+                profile,
+                certificate,
+                idempotency_key,
+            } => print_json(&license::install(&profile, &certificate, idempotency_key)?),
+        },
         Command::Mcp(args) => match args.command {
             McpCommand::Serve { profile } => mcp::serve(&profile),
         },

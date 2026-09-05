@@ -62,7 +62,7 @@ output "secret_resources" {
 
 output "node_config_fragment" {
   value = {
-    deploymentTarget = "cloud_dedicated"
+    deploymentTarget = "private_connected"
     deploymentShape  = "single_node"
     computeProfile   = var.compute_profile
     networking = {

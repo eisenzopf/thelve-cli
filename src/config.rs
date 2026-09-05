@@ -104,6 +104,27 @@ pub struct Spec {
     pub secret_names: Vec<String>,
     #[serde(default)]
     pub deletion_protection: bool,
+    /// Entitlement issuers the appliance trusts; rendered into the node
+    /// configuration. Empty: no licence can be installed.
+    #[serde(default)]
+    pub licensing: Licensing,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Licensing {
+    #[serde(default)]
+    pub trusted_issuers: Vec<TrustedIssuer>,
+}
+
+/// One raw Ed25519 public key an entitlement issuer signs with, as
+/// `thelve license trust` prints it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TrustedIssuer {
+    pub issuer: String,
+    pub key_id: String,
+    pub public_key: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -263,6 +284,7 @@ impl CloudDeployment {
                     .map(|value| (*value).into())
                     .collect(),
                 deletion_protection: false,
+                licensing: Licensing::default(),
             },
         })
     }
