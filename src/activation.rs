@@ -127,7 +127,7 @@ pub fn render_node_config(
             "backup": {"destinationRef": "secret://backup/destination", "schedule": "0 3 * * *"},
             "observability": observability,
             "security": {"manageHostFirewall": false},
-            "licensing": {"trustedIssuers": intent.spec.licensing.trusted_issuers},
+            "licensing": intent.spec.licensing,
             "secretBindings": secret_bindings
         }
     });

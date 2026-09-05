@@ -257,6 +257,16 @@ fn trusted_issuers(issuer_url: &str) -> Result<Vec<TrustedIssuer>> {
     serde_json::from_value(issuers).context("issuer trust entries")
 }
 
+/// The tenant the appliance provisions at boot, derived exactly as the
+/// renderer derives it (`thelve_single_node::installation_tenant_id`), so the
+/// issuer can be told whom to license before the node exists.
+pub fn installation_tenant_id(name: &str) -> uuid::Uuid {
+    uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_URL,
+        format!("thelve:single-node:{name}:tenant").as_bytes(),
+    )
+}
+
 fn print_next_steps(request: &LaunchRequest) {
     let app = request.domains.get("app").map_or_else(
         || "the app domain".to_owned(),
@@ -265,13 +275,23 @@ fn print_next_steps(request: &LaunchRequest) {
     println!();
     println!("launch complete. Next:");
     println!(
+        "  0. This installation's tenant id is {}; the issuer needs it to produce the licence.",
+        installation_tenant_id(&request.name)
+    );
+    println!(
         "  1. Open {app} and complete the setup checklist: first administrator, sign-in, telephony, licence."
     );
     println!(
-        "  2. Paste the licence the issuer produced for this installation into Platform admin → Installation,"
+        "  2. Install the licence the issuer produced: thelve license install --config {} --certificate licence.json \\",
+        request.config.display()
     );
     println!(
-        "     or install it from here once an AAuth profile is bound: thelve license install --profile NAME --certificate licence.json"
+        "       --release-dir {} --tls-contact-email {} --approve",
+        request.release_dir.display(),
+        request.tls_contact_email
+    );
+    println!(
+        "     (re-renders and re-activates so the control API installs it at boot), or paste it under Platform admin → Installation."
     );
     println!(
         "  3. Keep {} and {}; a later `thelve launch` with the same arguments resumes from them.",
@@ -283,6 +303,18 @@ fn print_next_steps(request: &LaunchRequest) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pinned against the renderer's derivation in the Thelve repository
+    /// (`crates/thelve-single-node/src/compose.rs`); both sides test this
+    /// value so a drift shows up as a failing test rather than an unlicensed
+    /// appliance.
+    #[test]
+    fn installation_tenant_id_matches_the_renderer() {
+        assert_eq!(
+            installation_tenant_id("thelve-test").to_string(),
+            "e37ee2de-10ef-5215-944c-fa2d2393eb0b"
+        );
+    }
 
     #[test]
     fn steps_are_recorded_in_runbook_order_and_a_foreign_receipt_is_refused() {

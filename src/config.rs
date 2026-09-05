@@ -115,6 +115,10 @@ pub struct Spec {
 pub struct Licensing {
     #[serde(default)]
     pub trusted_issuers: Vec<TrustedIssuer>,
+    /// The installation's signed certificate, installed by the control API at
+    /// boot. A signed public document, not a secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate: Option<serde_json::Value>,
 }
 
 /// One raw Ed25519 public key an entitlement issuer signs with, as

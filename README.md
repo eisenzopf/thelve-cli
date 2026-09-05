@@ -42,8 +42,10 @@ remote inputs verified by digest and signature.
 - packaged, validated `thelve-admin` and `thelve-cloud` skills installable for
   Codex, Claude, or both
 
-- issuer trust capture and one-step licence installation on a deployed
-  appliance: `thelve license trust`, `thelve license install`
+- issuer trust capture and licence installation on a deployed appliance,
+  either at boot through the deployment intent (before any administrator
+  exists) or through a bound AAuth profile: `thelve license trust`,
+  `thelve license install`
 - the whole GCP sequence as one resumable, receipt-recorded command:
   `thelve launch`
 

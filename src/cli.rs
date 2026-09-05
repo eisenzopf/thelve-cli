@@ -108,15 +108,30 @@ enum LicenseCommand {
         #[arg(long)]
         issuer_url: String,
     },
-    /// Install a signed entitlement certificate through a bound AAuth profile.
+    /// Install a signed entitlement certificate: through a bound AAuth profile, or before any
+    /// administrator exists by recording it in the deployment intent and re-activating the node.
     Install {
-        #[arg(long)]
-        profile: String,
+        /// Bound AAuth profile to invoke the install capability with.
+        #[arg(long, conflicts_with = "config")]
+        profile: Option<String>,
         /// Signed certificate JSON file, or - for stdin.
         #[arg(long, default_value = "-")]
         certificate: PathBuf,
         #[arg(long)]
         idempotency_key: Option<String>,
+        /// Deployment intent; with this the certificate is installed at the next boot.
+        #[arg(long, requires_all = ["release_dir", "tls_contact_email"])]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        release_dir: Option<PathBuf>,
+        #[arg(long)]
+        tls_contact_email: Option<String>,
+        #[arg(long, default_value = "node.yaml")]
+        node_config: PathBuf,
+        #[arg(long, default_value = "activation-receipt.json")]
+        activation_receipt: PathBuf,
+        #[arg(long)]
+        approve: bool,
     },
 }
 
@@ -809,7 +824,31 @@ pub fn execute(cli: Cli) -> Result<()> {
                 profile,
                 certificate,
                 idempotency_key,
-            } => print_json(&license::install(&profile, &certificate, idempotency_key)?),
+                config,
+                release_dir,
+                tls_contact_email,
+                node_config,
+                activation_receipt,
+                approve,
+            } => match (profile, config) {
+                (Some(profile), None) => {
+                    print_json(&license::install(&profile, &certificate, idempotency_key)?)
+                }
+                (None, Some(config)) => {
+                    require_approval(approve, "license install --config")?;
+                    license::install_via_render(
+                        &config,
+                        &certificate,
+                        &release_dir.expect("clap requires release_dir with config"),
+                        &tls_contact_email.expect("clap requires tls_contact_email with config"),
+                        &node_config,
+                        &activation_receipt,
+                    )
+                }
+                _ => bail!(
+                    "pass either --profile (installed through the API) or --config (installed at boot)"
+                ),
+            },
         },
         Command::Mcp(args) => match args.command {
             McpCommand::Serve { profile } => mcp::serve(&profile),

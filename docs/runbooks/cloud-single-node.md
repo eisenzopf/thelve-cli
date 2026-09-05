@@ -254,11 +254,24 @@ Two steps, both value-free on the workstation:
    thelve license trust --issuer-url https://licenses.rudeless.ai
    ```
 
-2. After activation and the first administrator's enrolment, install the
-   certificate the issuer produced for this installation through a bound
-   AAuth profile. The call enrols the tenant with the certificate's issuer
-   on first use and ingests the certificate with the usual anti-rollback and
-   exact-replay rules; the same file installs idempotently.
+2. Install the certificate the issuer produced for this installation. The
+   issuer needs the installation's tenant id, which `thelve launch` prints
+   and which is derived from the deployment name; the node provisions that
+   tenant at first boot. Before any administrator exists, record the
+   certificate in the deployment intent and re-activate; the control API
+   installs it at boot, enrolling the tenant with the certificate's issuer
+   on first use and ingesting with the usual anti-rollback and exact-replay
+   rules:
+
+   ```sh
+   thelve license install --config deployment.yaml --certificate licence.json \
+     --release-dir verified-preview --tls-contact-email operator@example.com \
+     --node-config node-licensed.yaml --activation-receipt licence-activation-receipt.json \
+     --approve
+   ```
+
+   Once an AAuth profile is bound, the same certificate (or a renewal)
+   installs through the API instead, without re-activation:
 
    ```sh
    thelve license install --profile thelve-test --certificate licence.json

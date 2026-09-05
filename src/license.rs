@@ -9,11 +9,13 @@
 //! The trust anchor the appliance needs first is published by the issuer and
 //! copied into the deployment intent's `licensing.trustedIssuers`.
 
+use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+use crate::activation;
 use crate::agent::{AgentClient, CapabilityCall, read_json_input};
 
 const INSTALL_CAPABILITY: &str = "platform.installation.license.install";
@@ -46,6 +48,61 @@ pub fn install(
         idempotency_key: idempotency_key
             .unwrap_or_else(|| format!("license-install-{certificate_id}")),
     })
+}
+
+/// Install a licence before any administrator exists: the certificate goes
+/// into the deployment intent's `licensing.certificate`, the node
+/// configuration is re-rendered, and the node is re-activated so the control
+/// API installs it at boot. The certificate is a signed public document, so
+/// carrying it in the intent is fine; the intent is rewritten in place after
+/// it validates.
+pub fn install_via_render(
+    config_path: &Path,
+    certificate_path: &Path,
+    release_dir: &Path,
+    tls_contact_email: &str,
+    node_config: &Path,
+    activation_receipt: &Path,
+) -> Result<()> {
+    let certificate = read_json_input(certificate_path)?;
+    if certificate
+        .get("signature")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        bail!("certificate document is unsigned; obtain the signed certificate from the issuer");
+    }
+    let mut intent = crate::config::load(config_path)?;
+    let expected_tenant = crate::launch::installation_tenant_id(&intent.metadata.name).to_string();
+    if certificate.get("tenant_id").and_then(Value::as_str) != Some(expected_tenant.as_str()) {
+        bail!(
+            "certificate names another tenant; this installation's tenant id is {expected_tenant}"
+        );
+    }
+    if node_config.exists() {
+        bail!(
+            "refusing to overwrite existing {}; pass --node-config with a new path",
+            node_config.display()
+        );
+    }
+    if activation_receipt.exists() {
+        bail!(
+            "refusing to overwrite existing {}; pass --activation-receipt with a new path",
+            activation_receipt.display()
+        );
+    }
+    intent.spec.licensing.certificate = Some(certificate);
+    intent.validate()?;
+    let rendered = serde_yaml::to_string(&intent).context("serialize deployment intent")?;
+    fs::write(config_path, rendered).with_context(|| format!("write {}", config_path.display()))?;
+    println!(
+        "licence recorded in {}; re-rendering and re-activating",
+        config_path.display()
+    );
+    activation::render_node_config(config_path, release_dir, node_config, tls_contact_email)?;
+    activation::activate_gcp(config_path, release_dir, node_config, activation_receipt)?;
+    println!("licence installed at boot; Platform admin → Installation shows the suites it grants");
+    Ok(())
 }
 
 /// Fetch the issuer's published trust anchors, in the shape the deployment
