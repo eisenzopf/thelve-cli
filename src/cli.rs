@@ -71,6 +71,15 @@ struct LaunchArgs {
     /// Entitlement issuer whose published trust the appliance accepts (`thelve license trust`).
     #[arg(long)]
     issuer_url: Option<String>,
+    /// Your OIDC provider's HTTPS issuer URL; people sign in with the accounts they already have.
+    #[arg(long, requires = "oidc_client_id", conflicts_with = "preview_demo_identity")]
+    oidc_issuer: Option<String>,
+    /// The client your provider registered for the Thelve desk (its secret is typed at a hidden prompt).
+    #[arg(long, requires = "oidc_issuer")]
+    oidc_client_id: Option<String>,
+    /// Test environments only: header-named demo identity instead of a provider. Never for a customer host.
+    #[arg(long, conflicts_with = "oidc_issuer")]
+    preview_demo_identity: bool,
     #[arg(long, default_value = "deployment.yaml")]
     config: PathBuf,
     #[arg(long, default_value = "node.yaml")]
@@ -81,6 +90,19 @@ struct LaunchArgs {
     receipt: PathBuf,
     #[arg(long)]
     approve: bool,
+}
+
+fn launch_identity(args: &LaunchArgs) -> Result<config::IdentityIntent> {
+    match (&args.oidc_issuer, &args.oidc_client_id, args.preview_demo_identity) {
+        (Some(issuer), Some(client_id), false) => Ok(config::IdentityIntent::ExternalOidc {
+            issuer: issuer.clone(),
+            client_id: client_id.clone(),
+        }),
+        (None, None, true) => Ok(config::IdentityIntent::PreviewDemo),
+        _ => bail!(
+            "choose how people sign in: --oidc-issuer URL --oidc-client-id ID for a customer installation, or --preview-demo-identity for a test environment"
+        ),
+    }
 }
 
 fn parse_domain(value: &str) -> Result<(String, String), String> {
@@ -801,6 +823,7 @@ pub fn execute(cli: Cli) -> Result<()> {
         },
         Command::Agent(args) => execute_agent(args),
         Command::Launch(args) => launch::launch(&launch::LaunchRequest {
+            identity: launch_identity(&args)?,
             provider: args.provider,
             name: args.name,
             project: args.project,

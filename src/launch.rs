@@ -39,6 +39,8 @@ pub struct LaunchRequest {
     pub tls_contact_email: String,
     pub release_dir: PathBuf,
     pub issuer_url: Option<String>,
+    /// How people will sign in; external OIDC for any customer host.
+    pub identity: config::IdentityIntent,
     pub config: PathBuf,
     pub node_config: PathBuf,
     pub activation_receipt: PathBuf,
@@ -55,6 +57,7 @@ pub enum Step {
     Prepare,
     InternalSecrets,
     TelnyxSecrets,
+    OidcClientSecret,
     Up,
     RenderNodeConfig,
     Activate,
@@ -81,6 +84,7 @@ impl Step {
             Self::Prepare => "prepare",
             Self::InternalSecrets => "secret initialize-internal",
             Self::TelnyxSecrets => "telnyx secrets",
+            Self::OidcClientSecret => "oidc client secret",
             Self::Up => "up",
             Self::RenderNodeConfig => "render-node-config",
             Self::Activate => "activate-gcp",
@@ -177,6 +181,13 @@ pub fn launch(request: &LaunchRequest) -> Result<()> {
                     secrets::set(&request.config, &intent, name, value)?;
                 }
             }
+            Step::OidcClientSecret => {
+                let intent = config::load(&request.config)?;
+                if matches!(intent.spec.identity, config::IdentityIntent::ExternalOidc { .. }) {
+                    let value = secrets::read_hidden("oidc/client-secret (the client secret your provider issued for the Thelve desk): ")?;
+                    secrets::set(&request.config, &intent, "oidc/client-secret", value)?;
+                }
+            }
             Step::Up => {
                 let intent = config::load(&request.config)?;
                 secrets::verify_required_versions(
@@ -236,6 +247,7 @@ fn write_intent(request: &LaunchRequest) -> Result<()> {
     intent.spec.host_image = request.host_image.clone();
     intent.spec.state.bucket = request.state_bucket.clone();
     intent.spec.domains = request.domains.clone();
+    intent.spec.identity = request.identity.clone();
     if let Some(issuer_url) = &request.issuer_url {
         intent.spec.licensing.trusted_issuers = trusted_issuers(issuer_url)?;
     }
@@ -334,6 +346,7 @@ mod tests {
             tls_contact_email: "operator@example.com".into(),
             release_dir: directory.join("release"),
             issuer_url: None,
+            identity: config::IdentityIntent::PreviewDemo,
             config: directory.join("deployment.yaml"),
             node_config: directory.join("node.yaml"),
             activation_receipt: directory.join("activation-receipt.json"),

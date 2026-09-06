@@ -108,6 +108,55 @@ pub struct Spec {
     /// configuration. Empty: no licence can be installed.
     #[serde(default)]
     pub licensing: Licensing,
+    /// How people sign in. A customer installation binds its own OIDC
+    /// provider; header-named demo identity exists for test environments
+    /// only and the appliance refuses to boot with it anywhere else.
+    pub identity: IdentityIntent,
+}
+
+/// The identity choice recorded in the intent and rendered into the node.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase", tag = "mode")]
+pub enum IdentityIntent {
+    /// Sign-in through the customer's own OIDC provider.
+    #[serde(rename = "external_oidc")]
+    ExternalOidc {
+        /// The provider's HTTPS issuer URL.
+        issuer: String,
+        /// The client registered for the Thelve desk.
+        client_id: String,
+    },
+    /// Header-named identity for a test environment; never a customer host.
+    #[serde(rename = "preview_demo")]
+    PreviewDemo,
+}
+
+impl IdentityIntent {
+    /// # Errors
+    ///
+    /// Returns an error when an OIDC issuer is not an HTTPS URL, a client id
+    /// is empty, or demo identity is asked for outside a test environment.
+    pub fn validate(&self, environment: Environment) -> Result<()> {
+        match self {
+            Self::ExternalOidc { issuer, client_id } => {
+                if !issuer.starts_with("https://") || issuer.len() > 2048 {
+                    bail!("identity.issuer must be an https:// URL");
+                }
+                if client_id.trim().is_empty() || client_id.len() > 255 {
+                    bail!("identity.clientId must be a non-empty client identifier");
+                }
+                Ok(())
+            }
+            Self::PreviewDemo => {
+                if environment != Environment::Test {
+                    bail!(
+                        "identity.mode preview_demo takes the caller's word for who they are and is allowed only in a test environment; bind an OIDC provider (identity.mode external_oidc)"
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -289,11 +338,13 @@ impl CloudDeployment {
                     .collect(),
                 deletion_protection: false,
                 licensing: Licensing::default(),
+                identity: IdentityIntent::PreviewDemo,
             },
         })
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.spec.identity.validate(self.spec.environment)?;
         if self.api_version != API_VERSION || self.kind != KIND {
             bail!(
                 "unsupported deployment contract {}/{}",

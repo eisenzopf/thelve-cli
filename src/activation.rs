@@ -122,7 +122,15 @@ pub fn render_node_config(
                 "redis": {"mode": "bundled"},
                 "objects": {"mode": "gcs", "url": format!("{object_store_url}/objects")}
             },
-            "identity": {"mode": "preview_demo"},
+            "identity": match &intent.spec.identity {
+                crate::config::IdentityIntent::ExternalOidc { issuer, client_id } => json!({
+                    "mode": "external_oidc",
+                    "issuer": issuer,
+                    "clientId": client_id,
+                    "clientSecretRef": "secret://oidc/client-secret"
+                }),
+                crate::config::IdentityIntent::PreviewDemo => json!({"mode": "preview_demo"}),
+            },
             "tls": {"mode": "acme", "contactEmail": tls_contact_email},
             "backup": {"destinationRef": "secret://backup/destination", "schedule": "0 3 * * *"},
             "observability": observability,
