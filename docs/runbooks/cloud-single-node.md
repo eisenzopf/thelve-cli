@@ -74,9 +74,9 @@ thelve launch --provider gcp --name thelve-test \
 `--oidc-issuer` and `--oidc-client-id` name the OIDC provider people sign in
 with; the client secret your provider issued is typed at a hidden prompt
 (`oidc/client-secret`) and written straight to the cloud secret store. A
-test environment may pass `--preview-demo-identity` instead, which renders
-header-named demo identity; the appliance refuses to boot with it anywhere
-but a preview render, and the intent refuses it outside `environment: test`.
+deployment made through this CLI never renders demo identity: there is no
+flag for it, and the appliance refuses to boot with it outside a preview
+render produced by the release tooling.
 
 It ends with `deploy status` and the next steps: open the app domain and
 complete the setup checklist (first administrator, sign-in, telephony,

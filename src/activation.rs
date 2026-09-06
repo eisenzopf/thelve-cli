@@ -129,7 +129,6 @@ pub fn render_node_config(
                     "clientId": client_id,
                     "clientSecretRef": "secret://oidc/client-secret"
                 }),
-                crate::config::IdentityIntent::PreviewDemo => json!({"mode": "preview_demo"}),
             },
             "tls": {"mode": "acme", "contactEmail": tls_contact_email},
             "backup": {"destinationRef": "secret://backup/destination", "schedule": "0 3 * * *"},

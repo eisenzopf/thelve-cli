@@ -108,9 +108,8 @@ pub struct Spec {
     /// configuration. Empty: no licence can be installed.
     #[serde(default)]
     pub licensing: Licensing,
-    /// How people sign in. A customer installation binds its own OIDC
-    /// provider; header-named demo identity exists for test environments
-    /// only and the appliance refuses to boot with it anywhere else.
+    /// How people sign in: always the customer's own OIDC provider. A
+    /// deployment made through this CLI never renders demo identity.
     pub identity: IdentityIntent,
 }
 
@@ -126,17 +125,14 @@ pub enum IdentityIntent {
         /// The client registered for the Thelve desk.
         client_id: String,
     },
-    /// Header-named identity for a test environment; never a customer host.
-    #[serde(rename = "preview_demo")]
-    PreviewDemo,
 }
 
 impl IdentityIntent {
     /// # Errors
     ///
-    /// Returns an error when an OIDC issuer is not an HTTPS URL, a client id
-    /// is empty, or demo identity is asked for outside a test environment.
-    pub fn validate(&self, environment: Environment) -> Result<()> {
+    /// Returns an error when the OIDC issuer is not an HTTPS URL or the
+    /// client id is empty.
+    pub fn validate(&self) -> Result<()> {
         match self {
             Self::ExternalOidc { issuer, client_id } => {
                 if !issuer.starts_with("https://") || issuer.len() > 2048 {
@@ -144,14 +140,6 @@ impl IdentityIntent {
                 }
                 if client_id.trim().is_empty() || client_id.len() > 255 {
                     bail!("identity.clientId must be a non-empty client identifier");
-                }
-                Ok(())
-            }
-            Self::PreviewDemo => {
-                if environment != Environment::Test {
-                    bail!(
-                        "identity.mode preview_demo takes the caller's word for who they are and is allowed only in a test environment; bind an OIDC provider (identity.mode external_oidc)"
-                    );
                 }
                 Ok(())
             }
@@ -338,13 +326,16 @@ impl CloudDeployment {
                     .collect(),
                 deletion_protection: false,
                 licensing: Licensing::default(),
-                identity: IdentityIntent::PreviewDemo,
+                identity: IdentityIntent::ExternalOidc {
+                issuer: "https://login.example.com/realms/acme".into(),
+                client_id: "thelve-desk".into(),
+            },
             },
         })
     }
 
     pub fn validate(&self) -> Result<()> {
-        self.spec.identity.validate(self.spec.environment)?;
+        self.spec.identity.validate()?;
         if self.api_version != API_VERSION || self.kind != KIND {
             bail!(
                 "unsupported deployment contract {}/{}",

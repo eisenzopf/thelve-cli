@@ -39,7 +39,7 @@ pub struct LaunchRequest {
     pub tls_contact_email: String,
     pub release_dir: PathBuf,
     pub issuer_url: Option<String>,
-    /// How people will sign in; external OIDC for any customer host.
+    /// The OIDC provider people sign in with.
     pub identity: config::IdentityIntent,
     pub config: PathBuf,
     pub node_config: PathBuf,
@@ -183,10 +183,10 @@ pub fn launch(request: &LaunchRequest) -> Result<()> {
             }
             Step::OidcClientSecret => {
                 let intent = config::load(&request.config)?;
-                if matches!(intent.spec.identity, config::IdentityIntent::ExternalOidc { .. }) {
-                    let value = secrets::read_hidden("oidc/client-secret (the client secret your provider issued for the Thelve desk): ")?;
-                    secrets::set(&request.config, &intent, "oidc/client-secret", value)?;
-                }
+                let value = secrets::read_hidden(
+                    "oidc/client-secret (the client secret your provider issued for the Thelve desk): ",
+                )?;
+                secrets::set(&request.config, &intent, "oidc/client-secret", value)?;
             }
             Step::Up => {
                 let intent = config::load(&request.config)?;
@@ -346,7 +346,10 @@ mod tests {
             tls_contact_email: "operator@example.com".into(),
             release_dir: directory.join("release"),
             issuer_url: None,
-            identity: config::IdentityIntent::PreviewDemo,
+            identity: config::IdentityIntent::ExternalOidc {
+                issuer: "https://login.example.com/realms/acme".into(),
+                client_id: "thelve-desk".into(),
+            },
             config: directory.join("deployment.yaml"),
             node_config: directory.join("node.yaml"),
             activation_receipt: directory.join("activation-receipt.json"),
