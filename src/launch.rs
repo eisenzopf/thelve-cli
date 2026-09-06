@@ -5,7 +5,10 @@
 //! called in the runbook's order with the same approval gate, and recorded in
 //! a receipt so a stopped launch resumes at the step that did not complete
 //! rather than re-applying what did. The two Telnyx values are still typed at
-//! hidden prompts: a launch never takes a secret on the command line.
+//! hidden prompts: a launch never takes a secret on the command line. After
+//! the host is up, the launch asks Rudeless for the installation's licence
+//! and records it in the intent, so the node is licensed at first boot and
+//! nobody visits a licence page.
 //!
 //! GCP only for activation today, like the runbook; on AWS the launch stops
 //! after `up` and says so.
@@ -41,6 +44,10 @@ pub struct LaunchRequest {
     pub issuer_url: Option<String>,
     /// Pins the issuer's trust document; see `thelve license trust --expect-sha256`.
     pub issuer_trust_sha256: Option<String>,
+    /// Where the licence is requested; `None` is Rudeless.
+    pub license_service_url: Option<String>,
+    /// Leave the installation unlicensed and print the manual command instead.
+    pub skip_license: bool,
     /// The OIDC provider people sign in with.
     pub identity: config::IdentityIntent,
     pub config: PathBuf,
@@ -61,12 +68,13 @@ pub enum Step {
     TelnyxSecrets,
     OidcClientSecret,
     Up,
+    License,
     RenderNodeConfig,
     Activate,
 }
 
 impl Step {
-    const ORDER: [Self; 9] = [
+    const ORDER: [Self; 10] = [
         Self::Doctor,
         Self::Intent,
         Self::BootstrapState,
@@ -74,6 +82,7 @@ impl Step {
         Self::InternalSecrets,
         Self::TelnyxSecrets,
         Self::Up,
+        Self::License,
         Self::RenderNodeConfig,
         Self::Activate,
     ];
@@ -88,6 +97,7 @@ impl Step {
             Self::TelnyxSecrets => "telnyx secrets",
             Self::OidcClientSecret => "oidc client secret",
             Self::Up => "up",
+            Self::License => "licence",
             Self::RenderNodeConfig => "render-node-config",
             Self::Activate => "activate-gcp",
         }
@@ -198,6 +208,7 @@ pub fn launch(request: &LaunchRequest) -> Result<()> {
                 )?;
                 terraform::apply(&request.config, terraform::HostState::Running, false)?;
             }
+            Step::License => acquire_license(request)?,
             Step::RenderNodeConfig => activation::render_node_config(
                 &request.config,
                 &request.release_dir,
@@ -246,6 +257,7 @@ fn write_intent(request: &LaunchRequest) -> Result<()> {
         request.region.clone(),
         request.zone.clone(),
     )?;
+    intent.metadata.contact_email = Some(request.tls_contact_email.clone());
     intent.spec.host_image = request.host_image.clone();
     intent.spec.state.bucket = request.state_bucket.clone();
     intent.spec.domains = request.domains.clone();
@@ -258,6 +270,71 @@ fn write_intent(request: &LaunchRequest) -> Result<()> {
     config::write_new(&request.config, &intent)?;
     println!(
         "launch: wrote non-secret deployment intent to {}",
+        request.config.display()
+    );
+    Ok(())
+}
+
+/// Ask Rudeless for this installation's licence and record it, with the
+/// issuer's trust anchors, in the deployment intent. Idempotent: an intent
+/// that already carries a certificate is left alone, and the service answers
+/// a repeated request for the same installation with the same certificate.
+fn acquire_license(request: &LaunchRequest) -> Result<()> {
+    let mut intent = config::load(&request.config)?;
+    if let Some(certificate) = &intent.spec.licensing.certificate {
+        println!(
+            "launch: the intent already carries certificate {}; keeping it",
+            certificate
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?")
+        );
+        return Ok(());
+    }
+    if request.skip_license {
+        println!(
+            "launch: --skip-license; the appliance boots unlicensed. Install one later with: thelve license install --config {} --certificate licence.json --release-dir {} --tls-contact-email {} --approve",
+            request.config.display(),
+            request.release_dir.display(),
+            request.tls_contact_email
+        );
+        return Ok(());
+    }
+    let tenant_id = installation_tenant_id(&request.name);
+    let service_url = request
+        .license_service_url
+        .as_deref()
+        .unwrap_or(license::DEFAULT_LICENSE_SERVICE_URL);
+    let issued = license::request(
+        service_url,
+        &request.tls_contact_email,
+        tenant_id,
+        &request.name,
+    )?;
+    if intent.spec.licensing.trusted_issuers.is_empty() {
+        let issuer_url = request
+            .issuer_url
+            .as_deref()
+            .unwrap_or(license::DEFAULT_ISSUER_URL);
+        intent.spec.licensing.trusted_issuers =
+            trusted_issuers(issuer_url, request.issuer_trust_sha256.as_deref())?;
+    }
+    if intent.metadata.contact_email.is_none() {
+        intent.metadata.contact_email = Some(request.tls_contact_email.clone());
+    }
+    intent.spec.licensing.certificate = Some(issued.certificate);
+    intent.validate()?;
+    config::rewrite(&request.config, &intent)?;
+    println!(
+        "launch: licence {} for {} from {} ({}) recorded in {}; the node installs it at first boot",
+        issued.certificate_id,
+        issued.suites.join(", "),
+        issued.issuer,
+        if issued.reissued {
+            "re-delivered"
+        } else {
+            "issued"
+        },
         request.config.display()
     );
     Ok(())
@@ -287,29 +364,29 @@ fn print_next_steps(request: &LaunchRequest) {
         || "the app domain".to_owned(),
         |domain| format!("https://{domain}"),
     );
+    let licensed = config::load(&request.config)
+        .ok()
+        .is_some_and(|intent| intent.spec.licensing.certificate.is_some());
     println!();
     println!("launch complete. Next:");
+    if licensed {
+        println!(
+            "  1. Open {app} and complete the setup checklist: first administrator, sign-in, telephony. The licence is installed."
+        );
+    } else {
+        println!(
+            "  1. Open {app} and complete the setup checklist: first administrator, sign-in, telephony, licence."
+        );
+        println!(
+            "  2. This installation's tenant id is {}; install its licence with: thelve license install --config {} --certificate licence.json --release-dir {} --tls-contact-email {} --approve",
+            installation_tenant_id(&request.name),
+            request.config.display(),
+            request.release_dir.display(),
+            request.tls_contact_email
+        );
+    }
     println!(
-        "  0. This installation's tenant id is {}; the issuer needs it to produce the licence.",
-        installation_tenant_id(&request.name)
-    );
-    println!(
-        "  1. Open {app} and complete the setup checklist: first administrator, sign-in, telephony, licence."
-    );
-    println!(
-        "  2. Install the licence the issuer produced: thelve license install --config {} --certificate licence.json \\",
-        request.config.display()
-    );
-    println!(
-        "       --release-dir {} --tls-contact-email {} --approve",
-        request.release_dir.display(),
-        request.tls_contact_email
-    );
-    println!(
-        "     (re-renders and re-activates so the control API installs it at boot), or paste it under Platform admin → Installation."
-    );
-    println!(
-        "  3. Keep {} and {}; a later `thelve launch` with the same arguments resumes from them.",
+        "  Keep {} and {}; a later `thelve launch` with the same arguments resumes from them.",
         request.receipt.display(),
         request.config.display()
     );
@@ -350,6 +427,8 @@ mod tests {
             release_dir: directory.join("release"),
             issuer_url: None,
             issuer_trust_sha256: None,
+            license_service_url: None,
+            skip_license: false,
             identity: config::IdentityIntent::ExternalOidc {
                 issuer: "https://login.example.com/realms/acme".into(),
                 client_id: "thelve-desk".into(),
@@ -375,6 +454,124 @@ mod tests {
             ..request
         };
         assert!(Receipt::load_or_new(&receipt_path, &other).is_err());
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    fn request_in(directory: &Path, license_service_url: Option<String>) -> LaunchRequest {
+        LaunchRequest {
+            provider: CloudProvider::Gcp,
+            name: "thelve-test".into(),
+            project: Some("project".into()),
+            region: "us-west1".into(),
+            zone: "us-west1-b".into(),
+            host_image: "projects/project/global/images/thelve-host-0-1-0".into(),
+            state_bucket: "thelve-test-state".into(),
+            domains: [
+                ("app", "desk.example.com"),
+                ("api", "api.example.com"),
+                ("media", "media.example.com"),
+                ("sip", "sip.example.com"),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value.to_owned()))
+            .collect(),
+            tls_contact_email: "operator@example.com".into(),
+            release_dir: directory.join("release"),
+            issuer_url: None,
+            issuer_trust_sha256: None,
+            license_service_url,
+            skip_license: false,
+            identity: config::IdentityIntent::ExternalOidc {
+                issuer: "https://login.example.com/realms/acme".into(),
+                client_id: "thelve-desk".into(),
+            },
+            config: directory.join("deployment.yaml"),
+            node_config: directory.join("node.yaml"),
+            activation_receipt: directory.join("activation-receipt.json"),
+            receipt: directory.join("launch-receipt.json"),
+            approve: true,
+        }
+    }
+
+    #[test]
+    fn the_licence_step_records_the_certificate_and_trust_and_is_idempotent() {
+        let directory =
+            std::env::temp_dir().join(format!("thelve-launch-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let tenant = installation_tenant_id("thelve-test");
+        let certificate = serde_json::json!({
+            "id": "0f3f6c2a-3c2e-4a7e-9c62-1b4d0f4d6a11",
+            "tenant_id": tenant.to_string(),
+            "issuer": "https://licenses.rudeless.ai",
+            "sequence": 1,
+            "signature": "c2lnbmVk",
+        });
+        let answer = serde_json::json!({
+            "tenant_id": tenant,
+            "certificate_id": "0f3f6c2a-3c2e-4a7e-9c62-1b4d0f4d6a11",
+            "suites": ["core"],
+            "issuer": "https://licenses.rudeless.ai",
+            "certificate": certificate,
+            "reissued": false,
+        });
+        let trust = serde_json::json!([
+            {"issuer": "https://licenses.rudeless.ai", "key_id": "k1", "public_key": "cHVibGlj"}
+        ]);
+        let base = license::stub::serve(
+            vec![
+                ("/license", 200, answer.to_string()),
+                ("/v1/trust", 200, trust.to_string()),
+            ],
+            2,
+        );
+        let mut request = request_in(&directory, Some(format!("{base}/license")));
+        request.issuer_url = Some(base.clone());
+        write_intent(&request).unwrap();
+        let before = config::load(&request.config).unwrap();
+        assert_eq!(
+            before.metadata.contact_email.as_deref(),
+            Some("operator@example.com")
+        );
+        assert!(before.spec.licensing.certificate.is_none());
+
+        acquire_license(&request).unwrap();
+        let after = config::load(&request.config).unwrap();
+        let recorded = after
+            .spec
+            .licensing
+            .certificate
+            .expect("certificate recorded");
+        assert_eq!(recorded["tenant_id"], tenant.to_string());
+        assert_eq!(after.spec.licensing.trusted_issuers.len(), 1);
+        assert_eq!(after.spec.licensing.trusted_issuers[0].key_id, "k1");
+
+        // The stub is exhausted; a second run must not need the network.
+        acquire_license(&request).unwrap();
+        let again = config::load(&request.config).unwrap();
+        assert_eq!(
+            again.spec.licensing.certificate.unwrap()["id"],
+            "0f3f6c2a-3c2e-4a7e-9c62-1b4d0f4d6a11"
+        );
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn skip_license_leaves_the_intent_unlicensed() {
+        let directory =
+            std::env::temp_dir().join(format!("thelve-launch-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let mut request = request_in(&directory, None);
+        request.skip_license = true;
+        write_intent(&request).unwrap();
+        acquire_license(&request).unwrap();
+        assert!(
+            config::load(&request.config)
+                .unwrap()
+                .spec
+                .licensing
+                .certificate
+                .is_none()
+        );
         fs::remove_dir_all(&directory).unwrap();
     }
 }

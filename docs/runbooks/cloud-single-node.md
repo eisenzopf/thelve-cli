@@ -66,16 +66,20 @@ thelve launch --provider gcp --name thelve-test \
   --domain media=media.example.com --domain sip=sip.example.com \
   --tls-contact-email operator@example.com \
   --release-dir verified-preview \
-  --issuer-url https://licenses.rudeless.ai \
   --oidc-issuer https://login.example.com/realms/acme --oidc-client-id thelve-desk \
   --approve
 ```
 
-`--issuer-trust-sha256` pins the licence issuer's trust document to the
-digest Rudeless publishes beside the issuer URL, so the keys the appliance
-accepts are the ones you were told about rather than whatever the name
-resolved to; `thelve license trust --expect-sha256` applies the same pin
-and prints the digest it fetched.
+After the host is up, the launch asks Rudeless for the installation's
+licence (free, one per installation, without expiry) using the installation
+id it derives from the deployment name and the `--tls-contact-email`
+address, fetches the issuer's published trust anchors, and records both in
+`deployment.yaml`; the node installs the certificate at first boot. Asking
+again for the same installation returns the same certificate, so a resumed
+launch is safe. `--issuer-trust-sha256` pins the trust document to the digest
+Rudeless publishes beside the issuer URL; `--issuer-url` and
+`--license-service-url` point at another issuer or service; `--skip-license`
+leaves the appliance unlicensed and prints the manual command.
 
 `--oidc-issuer` and `--oidc-client-id` name the OIDC provider people sign in
 with; the client secret your provider issued is typed at a hidden prompt
@@ -85,9 +89,8 @@ flag for it, and the appliance refuses to boot with it outside a preview
 render produced by the release tooling.
 
 It ends with `deploy status` and the next steps: open the app domain and
-complete the setup checklist (first administrator, sign-in, telephony,
-licence), and paste the issuer's certificate under Platform admin →
-Installation. On AWS the launch stops after `up` with the node configuration
+complete the setup checklist (first administrator, sign-in, telephony).
+`thelve license status` shows the certificate the intent carries. On AWS the launch stops after `up` with the node configuration
 rendered, because activation is GCP-only today.
 
 ## GCP sequence
@@ -254,9 +257,11 @@ immutable HTTPS package and SHA-256.
 
 ## Licence
 
-An appliance runs `legacy_unmanaged` — every module readable, nothing
-commercially bounded — until a signed entitlement certificate is installed.
-Two steps, both value-free on the workstation:
+`thelve launch` licenses the installation itself; the two steps below are
+the manual path for an air-gapped launch (`--skip-license`) or an issuer
+other than Rudeless. An appliance runs `legacy_unmanaged` — every module
+readable, nothing commercially bounded — until a signed entitlement
+certificate is installed. Both steps are value-free on the workstation:
 
 1. Before `render-node-config`, record which issuer the appliance trusts.
    `thelve license trust` fetches the issuer's published Ed25519 public keys

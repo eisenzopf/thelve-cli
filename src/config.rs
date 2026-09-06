@@ -85,6 +85,10 @@ pub struct CloudDeployment {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Metadata {
     pub name: String,
+    /// The operator address the launch gave for TLS notices; the licence
+    /// service records it so a person can be reached about releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_email: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -285,7 +289,10 @@ impl CloudDeployment {
         Ok(Self {
             api_version: API_VERSION.into(),
             kind: KIND.into(),
-            metadata: Metadata { name: name.clone() },
+            metadata: Metadata {
+                name: name.clone(),
+                contact_email: None,
+            },
             spec: Spec {
                 provider,
                 environment: Environment::Test,
@@ -327,9 +334,9 @@ impl CloudDeployment {
                 deletion_protection: false,
                 licensing: Licensing::default(),
                 identity: IdentityIntent::ExternalOidc {
-                issuer: "https://login.example.com/realms/acme".into(),
-                client_id: "thelve-desk".into(),
-            },
+                    issuer: "https://login.example.com/realms/acme".into(),
+                    client_id: "thelve-desk".into(),
+                },
             },
         })
     }
@@ -617,6 +624,17 @@ pub fn load(path: &Path) -> Result<CloudDeployment> {
         .with_context(|| format!("parse strict deployment intent {}", path.display()))?;
     intent.validate()?;
     Ok(intent)
+}
+
+/// Rewrite an existing intent in place, after a step that adds to it (the
+/// licence, a trust anchor). Nothing secret is ever in the intent.
+///
+/// # Errors
+///
+/// Returns an error when the intent cannot be serialized or written.
+pub fn rewrite(path: &Path, intent: &CloudDeployment) -> Result<()> {
+    let bytes = serde_yaml::to_string(intent).context("serialize deployment intent")?;
+    fs::write(path, bytes).with_context(|| format!("write {}", path.display()))
 }
 
 pub fn write_new(path: &Path, intent: &CloudDeployment) -> Result<()> {

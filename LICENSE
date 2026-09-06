@@ -1,0 +1,111 @@
+RUDELESS SOFTWARE LICENSE
+Version 1.0, September 2026
+
+Copyright (c) 2026 Rudeless LLC. All rights reserved.
+
+This software, including the Thelve platform, its services, the desk,
+the SDKs, the installers, the contracts and the documentation (together,
+the "Software"), is the proprietary property of Rudeless LLC
+("Rudeless"). The Software is licensed, not sold. It is not open-source
+software and is not licensed under the MIT, Apache or any other
+open-source licence, regardless of any metadata that says otherwise.
+
+1. GRANT
+
+   Subject to this licence and to a current Thelve entitlement issued by
+   Rudeless (the "Entitlement"), Rudeless grants you a non-exclusive,
+   non-transferable, revocable licence to:
+
+   (a) install and run the Software for your own business, on the
+       deployment targets, in the quantities and with the modules the
+       Entitlement names;
+
+   (b) use the published API, the SDKs, the components and the
+       documentation to build and operate software that connects to an
+       installation licensed under (a), including software you sell to
+       your own customers; and
+
+   (c) modify configuration, templates, playbooks, knowledge and other
+       content the Software is designed to let you change.
+
+   Rights not expressly granted are reserved by Rudeless.
+
+2. INDEPENDENT SOFTWARE VENDORS AND PARTNERS
+
+   Embedding the Software's capabilities in your own product through the
+   API and the SDKs is covered by section 1(b). Reselling the Software,
+   operating it for third parties, provisioning workspaces for them, or
+   bundling the Software image with your own product requires a separate
+   written partner agreement with Rudeless.
+
+3. RESTRICTIONS
+
+   Except as section 1 allows or applicable law requires, you may not:
+
+   (a) copy, distribute, sublicense, rent, lease or lend the Software;
+   (b) publish, mirror or make the Software's source code available;
+   (c) modify, translate or create derivative works of the Software's
+       source code, or fork the desk, other than through the extension
+       points the Software documents;
+   (d) reverse engineer, decompile or disassemble any part of the
+       Software that is not provided in source form;
+   (e) remove or alter any proprietary notice, licence marker, signature
+       or entitlement check;
+   (f) use the Software to build a competing product, or to train a
+       machine-learning model on the Software's source code; or
+   (g) use the Software beyond what the Entitlement permits.
+
+4. OWNERSHIP
+
+   Rudeless and its licensors own all right, title and interest in the
+   Software, including all intellectual-property rights. You own your
+   data, your content and the software you build under section 1(b).
+   Feedback you give Rudeless may be used without obligation to you.
+
+5. THIRD-PARTY COMPONENTS
+
+   The Software includes third-party components under their own
+   licences. Those licences apply to those components. Nothing here
+   restricts rights those licences grant.
+
+6. TERM AND TERMINATION
+
+   This licence lasts as long as your Entitlement is valid. It ends
+   automatically if you breach it and do not cure the breach within
+   thirty days of notice, or if your Entitlement expires or is revoked.
+   On termination you must stop using the Software and destroy your
+   copies. Sections 3, 4, 7, 8 and 9 survive termination. Your data
+   remains yours and may be exported through the Software's portability
+   tools before termination takes effect.
+
+7. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE". RUDELESS
+   DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED, INCLUDING
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE AND
+   NON-INFRINGEMENT, EXCEPT WHERE A WRITTEN AGREEMENT WITH RUDELESS SAYS
+   OTHERWISE.
+
+8. LIMITATION OF LIABILITY
+
+   TO THE FULLEST EXTENT THE LAW ALLOWS, RUDELESS IS NOT LIABLE FOR ANY
+   INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR PUNITIVE DAMAGES, OR
+   FOR LOST PROFITS, REVENUE, DATA OR GOODWILL, ARISING FROM THE
+   SOFTWARE. RUDELESS'S TOTAL LIABILITY UNDER THIS LICENCE IS LIMITED TO
+   THE FEES YOU PAID FOR THE SOFTWARE IN THE TWELVE MONTHS BEFORE THE
+   CLAIM.
+
+9. GENERAL
+
+   This licence is governed by the laws of the State of Delaware, United
+   States, without regard to its conflict-of-laws rules. Disputes will be
+   brought in the state or federal courts located in Delaware. If a
+   written agreement between you and Rudeless conflicts with this
+   licence, the written agreement controls. If any part of this licence
+   is unenforceable, the rest remains in effect. This licence, together
+   with your Entitlement and any written agreement with Rudeless, is the
+   entire agreement about the Software.
+
+SPDX-License-Identifier: LicenseRef-Rudeless-Proprietary
+
+Rudeless LLC · legal@rudeless.ai · https://rudeless.ai

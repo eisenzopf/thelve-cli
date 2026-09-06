@@ -68,11 +68,17 @@ struct LaunchArgs {
     /// Verified release directory from `thelve release fetch-gcp-preview`.
     #[arg(long)]
     release_dir: PathBuf,
-    /// Entitlement issuer whose published trust the appliance accepts (`thelve license trust`).
+    /// Entitlement issuer whose published trust the appliance accepts; defaults to Rudeless.
     #[arg(long)]
     issuer_url: Option<String>,
+    /// Where the launch requests the installation's licence; defaults to Rudeless.
+    #[arg(long)]
+    license_service_url: Option<String>,
+    /// Leave the installation unlicensed (air-gapped work); the manual command is printed.
+    #[arg(long)]
+    skip_license: bool,
     /// SHA-256 of the issuer's trust document, published beside the issuer URL; pins what --issuer-url fetches.
-    #[arg(long, requires = "issuer_url")]
+    #[arg(long)]
     issuer_trust_sha256: Option<String>,
     /// Your OIDC provider's HTTPS issuer URL; people sign in with the accounts they already have.
     #[arg(long)]
@@ -119,9 +125,14 @@ struct LicenseArgs {
 
 #[derive(Debug, Subcommand)]
 enum LicenseCommand {
+    /// Show the certificate recorded in a deployment intent, without its signature.
+    Status {
+        #[arg(long, default_value = "deployment.yaml")]
+        config: PathBuf,
+    },
     /// Print an issuer's published trust anchors as a `licensing` block for the deployment intent.
     Trust {
-        #[arg(long)]
+        #[arg(long, default_value = license::DEFAULT_ISSUER_URL)]
         issuer_url: String,
         /// The trust document's SHA-256 as published beside the issuer URL; refuses anything else.
         #[arg(long)]
@@ -833,6 +844,8 @@ pub fn execute(cli: Cli) -> Result<()> {
             release_dir: args.release_dir,
             issuer_url: args.issuer_url,
             issuer_trust_sha256: args.issuer_trust_sha256,
+            license_service_url: args.license_service_url,
+            skip_license: args.skip_license,
             config: args.config,
             node_config: args.node_config,
             activation_receipt: args.activation_receipt,
@@ -840,6 +853,20 @@ pub fn execute(cli: Cli) -> Result<()> {
             approve: args.approve,
         }),
         Command::License(args) => match args.command {
+            LicenseCommand::Status { config } => {
+                let intent = config::load(&config)?;
+                match &intent.spec.licensing.certificate {
+                    Some(certificate) => print_json(&license::summary(certificate)),
+                    None => {
+                        println!(
+                            "no certificate recorded in {}; this installation's tenant id is {}",
+                            config.display(),
+                            launch::installation_tenant_id(&intent.metadata.name)
+                        );
+                        Ok(())
+                    }
+                }
+            }
             LicenseCommand::Trust {
                 issuer_url,
                 expect_sha256,
