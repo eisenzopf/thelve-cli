@@ -39,6 +39,8 @@ pub struct LaunchRequest {
     pub tls_contact_email: String,
     pub release_dir: PathBuf,
     pub issuer_url: Option<String>,
+    /// Pins the issuer's trust document; see `thelve license trust --expect-sha256`.
+    pub issuer_trust_sha256: Option<String>,
     /// The OIDC provider people sign in with.
     pub identity: config::IdentityIntent,
     pub config: PathBuf,
@@ -249,7 +251,8 @@ fn write_intent(request: &LaunchRequest) -> Result<()> {
     intent.spec.domains = request.domains.clone();
     intent.spec.identity = request.identity.clone();
     if let Some(issuer_url) = &request.issuer_url {
-        intent.spec.licensing.trusted_issuers = trusted_issuers(issuer_url)?;
+        intent.spec.licensing.trusted_issuers =
+            trusted_issuers(issuer_url, request.issuer_trust_sha256.as_deref())?;
     }
     intent.validate()?;
     config::write_new(&request.config, &intent)?;
@@ -260,8 +263,8 @@ fn write_intent(request: &LaunchRequest) -> Result<()> {
     Ok(())
 }
 
-fn trusted_issuers(issuer_url: &str) -> Result<Vec<TrustedIssuer>> {
-    let document = license::trust(issuer_url)?;
+fn trusted_issuers(issuer_url: &str, expect_sha256: Option<&str>) -> Result<Vec<TrustedIssuer>> {
+    let document = license::trust(issuer_url, expect_sha256)?;
     let issuers = document
         .pointer("/licensing/trustedIssuers")
         .cloned()
@@ -346,6 +349,7 @@ mod tests {
             tls_contact_email: "operator@example.com".into(),
             release_dir: directory.join("release"),
             issuer_url: None,
+            issuer_trust_sha256: None,
             identity: config::IdentityIntent::ExternalOidc {
                 issuer: "https://login.example.com/realms/acme".into(),
                 client_id: "thelve-desk".into(),

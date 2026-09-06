@@ -71,6 +71,9 @@ struct LaunchArgs {
     /// Entitlement issuer whose published trust the appliance accepts (`thelve license trust`).
     #[arg(long)]
     issuer_url: Option<String>,
+    /// SHA-256 of the issuer's trust document, published beside the issuer URL; pins what --issuer-url fetches.
+    #[arg(long, requires = "issuer_url")]
+    issuer_trust_sha256: Option<String>,
     /// Your OIDC provider's HTTPS issuer URL; people sign in with the accounts they already have.
     #[arg(long)]
     oidc_issuer: String,
@@ -120,6 +123,9 @@ enum LicenseCommand {
     Trust {
         #[arg(long)]
         issuer_url: String,
+        /// The trust document's SHA-256 as published beside the issuer URL; refuses anything else.
+        #[arg(long)]
+        expect_sha256: Option<String>,
     },
     /// Install a signed entitlement certificate: through a bound AAuth profile, or before any
     /// administrator exists by recording it in the deployment intent and re-activating the node.
@@ -826,6 +832,7 @@ pub fn execute(cli: Cli) -> Result<()> {
             tls_contact_email: args.tls_contact_email,
             release_dir: args.release_dir,
             issuer_url: args.issuer_url,
+            issuer_trust_sha256: args.issuer_trust_sha256,
             config: args.config,
             node_config: args.node_config,
             activation_receipt: args.activation_receipt,
@@ -833,7 +840,10 @@ pub fn execute(cli: Cli) -> Result<()> {
             approve: args.approve,
         }),
         Command::License(args) => match args.command {
-            LicenseCommand::Trust { issuer_url } => print_json(&license::trust(&issuer_url)?),
+            LicenseCommand::Trust {
+                issuer_url,
+                expect_sha256,
+            } => print_json(&license::trust(&issuer_url, expect_sha256.as_deref())?),
             LicenseCommand::Install {
                 profile,
                 certificate,

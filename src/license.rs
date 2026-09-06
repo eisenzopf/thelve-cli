@@ -107,7 +107,11 @@ pub fn install_via_render(
 
 /// Fetch the issuer's published trust anchors, in the shape the deployment
 /// intent's `licensing.trustedIssuers` takes.
-pub fn trust(issuer_url: &str) -> Result<Value> {
+///
+/// `expect_sha256` pins the document: the digest Rudeless publishes beside
+/// the issuer URL, typed from that second channel, so a name that resolves to
+/// the wrong host at first fetch yields keys the operator never accepts.
+pub fn trust(issuer_url: &str, expect_sha256: Option<&str>) -> Result<Value> {
     let issuer_url = issuer_url.trim_end_matches('/');
     if !issuer_url.starts_with("https://") && !issuer_url.starts_with("http://127.0.0.1") {
         bail!("issuer URL must use https (or loopback http for a local issuer)");
@@ -121,6 +125,23 @@ pub fn trust(issuer_url: &str) -> Result<Value> {
     let body = response.bytes().context("read issuer trust")?;
     if body.len() > MAX_TRUST_BYTES {
         bail!("issuer trust document is unexpectedly large");
+    }
+    let trust_sha256 = {
+        use sha2::{Digest as _, Sha256};
+        format!("sha256:{:x}", Sha256::digest(&body))
+    };
+    if let Some(expected) = expect_sha256 {
+        let expected = expected.trim();
+        let expected = if expected.starts_with("sha256:") {
+            expected.to_owned()
+        } else {
+            format!("sha256:{expected}")
+        };
+        if !expected.eq_ignore_ascii_case(&trust_sha256) {
+            bail!(
+                "the issuer's trust document does not match the pinned digest: fetched {trust_sha256}; refusing to trust keys the pin does not name"
+            );
+        }
     }
     let keys: Vec<Value> = serde_json::from_slice(&body).context("parse issuer trust")?;
     let trusted_issuers = keys
@@ -139,5 +160,8 @@ pub fn trust(issuer_url: &str) -> Result<Value> {
             }))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(serde_json::json!({"licensing": {"trustedIssuers": trusted_issuers}}))
+    Ok(serde_json::json!({
+        "licensing": {"trustedIssuers": trusted_issuers},
+        "trustSha256": trust_sha256,
+    }))
 }

@@ -71,6 +71,12 @@ thelve launch --provider gcp --name thelve-test \
   --approve
 ```
 
+`--issuer-trust-sha256` pins the licence issuer's trust document to the
+digest Rudeless publishes beside the issuer URL, so the keys the appliance
+accepts are the ones you were told about rather than whatever the name
+resolved to; `thelve license trust --expect-sha256` applies the same pin
+and prints the digest it fetched.
+
 `--oidc-issuer` and `--oidc-client-id` name the OIDC provider people sign in
 with; the client secret your provider issued is typed at a hidden prompt
 (`oidc/client-secret`) and written straight to the cloud secret store. A
