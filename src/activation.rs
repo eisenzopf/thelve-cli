@@ -123,6 +123,7 @@ pub fn render_node_config(
                 "objects": {"mode": "gcs", "url": format!("{object_store_url}/objects")}
             },
             "identity": match &intent.spec.identity {
+                crate::config::IdentityIntent::BundledKeycloak => json!({"mode": "bundled_keycloak"}),
                 crate::config::IdentityIntent::ExternalOidc { issuer, client_id } => json!({
                     "mode": "external_oidc",
                     "issuer": issuer,

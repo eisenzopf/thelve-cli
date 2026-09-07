@@ -47,6 +47,7 @@ pub const REQUIRED_SECRET_NAMES: &[&str] = &[
     "postgres-password",
     "redis-password",
     "keycloak-database-password",
+    "keycloak-bootstrap-admin-password",
     "minio-root-user",
     "minio-root-password",
     "oidc/client-secret",
@@ -121,7 +122,12 @@ pub struct Spec {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", tag = "mode")]
 pub enum IdentityIntent {
-    /// Sign-in through the customer's own OIDC provider.
+    /// The appliance's own sign-in service: people are created in it by the
+    /// bootstrap administrator, and it signs them in to the desk. The default.
+    #[serde(rename = "bundled_keycloak")]
+    BundledKeycloak,
+    /// Sign-in through the customer's own OIDC provider, which must issue
+    /// proof-bound JWT access tokens and a tenant claim.
     #[serde(rename = "external_oidc")]
     ExternalOidc {
         /// The provider's HTTPS issuer URL.
@@ -138,6 +144,7 @@ impl IdentityIntent {
     /// client id is empty.
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::BundledKeycloak => Ok(()),
             Self::ExternalOidc { issuer, client_id } => {
                 if !issuer.starts_with("https://") || issuer.len() > 2048 {
                     bail!("identity.issuer must be an https:// URL");
@@ -333,10 +340,7 @@ impl CloudDeployment {
                     .collect(),
                 deletion_protection: false,
                 licensing: Licensing::default(),
-                identity: IdentityIntent::ExternalOidc {
-                    issuer: "https://login.example.com/realms/acme".into(),
-                    client_id: "thelve-desk".into(),
-                },
+                identity: IdentityIntent::BundledKeycloak,
             },
         })
     }

@@ -66,9 +66,16 @@ thelve launch --provider gcp --name thelve-test \
   --domain media=media.example.com --domain sip=sip.example.com \
   --tls-contact-email operator@example.com \
   --release-dir verified-preview \
-  --oidc-issuer https://login.example.com/realms/acme --oidc-client-id thelve-desk \
   --approve
 ```
+
+Sign-in is bundled: the appliance runs its own sign-in service under
+`https://desk.example.com/sso`, and the launch's next steps say how to
+create the first person in it. To use your own OpenID Connect provider
+instead, add `--oidc-issuer` and `--oidc-client-id`; the provider must
+issue proof-bound (DPoP) JWT access tokens that carry a `tenant` claim, which
+today means Keycloak or an equivalent, not a consumer Google or Microsoft
+account directly.
 
 After the host is up, the launch asks Rudeless for the installation's
 licence (free, one per installation, without expiry) using the installation
@@ -81,12 +88,12 @@ Rudeless publishes beside the issuer URL; `--issuer-url` and
 `--license-service-url` point at another issuer or service; `--skip-license`
 leaves the appliance unlicensed and prints the manual command.
 
-`--oidc-issuer` and `--oidc-client-id` name the OIDC provider people sign in
-with; the client secret your provider issued is typed at a hidden prompt
-(`oidc/client-secret`) and written straight to the cloud secret store. A
-deployment made through this CLI never renders demo identity: there is no
-flag for it, and the appliance refuses to boot with it outside a preview
-render produced by the release tooling.
+With `--oidc-issuer` and `--oidc-client-id`, the client secret your
+provider issued is typed at a hidden prompt (`oidc/client-secret`) and
+written straight to the cloud secret store. A deployment made through this
+CLI never renders demo identity: there is no flag for it, and the appliance
+refuses to boot with it outside a preview render produced by the release
+tooling.
 
 It ends with `deploy status` and the next steps: open the app domain and
 complete the setup checklist (first administrator, sign-in, telephony).

@@ -80,12 +80,13 @@ struct LaunchArgs {
     /// SHA-256 of the issuer's trust document, published beside the issuer URL; pins what --issuer-url fetches.
     #[arg(long)]
     issuer_trust_sha256: Option<String>,
-    /// Your OIDC provider's HTTPS issuer URL; people sign in with the accounts they already have.
-    #[arg(long)]
-    oidc_issuer: String,
+    /// Use your own OIDC provider instead of the bundled sign-in service: its HTTPS issuer URL.
+    /// The provider must issue proof-bound (DPoP) JWT access tokens carrying a tenant claim.
+    #[arg(long, requires = "oidc_client_id")]
+    oidc_issuer: Option<String>,
     /// The client your provider registered for the Thelve desk (its secret is typed at a hidden prompt).
-    #[arg(long)]
-    oidc_client_id: String,
+    #[arg(long, requires = "oidc_issuer")]
+    oidc_client_id: Option<String>,
     #[arg(long, default_value = "deployment.yaml")]
     config: PathBuf,
     #[arg(long, default_value = "node.yaml")]
@@ -99,9 +100,12 @@ struct LaunchArgs {
 }
 
 fn launch_identity(args: &LaunchArgs) -> config::IdentityIntent {
-    config::IdentityIntent::ExternalOidc {
-        issuer: args.oidc_issuer.clone(),
-        client_id: args.oidc_client_id.clone(),
+    match (&args.oidc_issuer, &args.oidc_client_id) {
+        (Some(issuer), Some(client_id)) => config::IdentityIntent::ExternalOidc {
+            issuer: issuer.clone(),
+            client_id: client_id.clone(),
+        },
+        _ => config::IdentityIntent::BundledKeycloak,
     }
 }
 

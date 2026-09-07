@@ -369,9 +369,22 @@ fn print_next_steps(request: &LaunchRequest) {
         .is_some_and(|intent| intent.spec.licensing.certificate.is_some());
     println!();
     println!("launch complete. Next:");
+    let bundled = config::load(&request.config)
+        .ok()
+        .is_some_and(|intent| intent.spec.identity == config::IdentityIntent::BundledKeycloak);
+    if bundled {
+        let secret = format!("{}-keycloak-bootstrap-admin-password", request.name);
+        println!(
+            "  0. Create the first person: open {app}/sso/admin/ and sign in as thelve-bootstrap. The password is the secret {secret} in your cloud project (GCP: gcloud secrets versions access latest --secret={secret}{}). In the Thelve realm, add a user with an email and a temporary password.",
+            request
+                .project
+                .as_deref()
+                .map_or_else(String::new, |project| format!(" --project={project}"))
+        );
+    }
     if licensed {
         println!(
-            "  1. Open {app} and complete the setup checklist: first administrator, sign-in, telephony. The licence is installed."
+            "  1. Open {app} and sign in as that person; the desk makes the first sign-in the first administrator. Then finish the checklist: telephony. The licence is installed."
         );
     } else {
         println!(

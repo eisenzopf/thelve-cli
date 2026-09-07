@@ -26,6 +26,7 @@ const INTERNAL_SECRET_NAMES: &[&str] = &[
     "postgres-password",
     "redis-password",
     "keycloak-database-password",
+    "keycloak-bootstrap-admin-password",
     "minio-root-user",
     "minio-root-password",
     "oidc/client-secret",
@@ -192,6 +193,7 @@ fn generated_internal_values(
         ("postgres-password".into(), postgres_password),
         ("redis-password".into(), random_token()),
         ("keycloak-database-password".into(), random_token()),
+        ("keycloak-bootstrap-admin-password".into(), random_token()),
         (
             "minio-root-user".into(),
             Zeroizing::new("thelveadmin".into()),

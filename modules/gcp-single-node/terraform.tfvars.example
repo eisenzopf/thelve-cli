@@ -29,6 +29,7 @@ secret_versions = {
   "postgres-password"             = "1"
   "redis-password"                = "1"
   "keycloak-database-password"    = "1"
+  "keycloak-bootstrap-admin-password" = "1"
   "minio-root-user"               = "1"
   "minio-root-password"           = "1"
   "oidc/client-secret"            = "1"
