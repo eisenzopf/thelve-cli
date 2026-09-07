@@ -3,6 +3,7 @@ mod agent;
 mod catalog;
 mod cli;
 mod cloud;
+mod identity;
 mod config;
 mod launch;
 mod license;

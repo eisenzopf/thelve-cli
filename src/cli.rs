@@ -60,11 +60,15 @@ struct LaunchArgs {
     #[arg(long)]
     state_bucket: String,
     /// Domain assignments as key=host, e.g. app=desk.example.com; repeat for app, api, media, sip.
+    /// Optional: without them the appliance uses sslip.io names for its own address, so no DNS is required.
     #[arg(long = "domain", value_parser = parse_domain)]
     domains: Vec<(String, String)>,
     /// Real operator address for ACME notices.
     #[arg(long)]
     tls_contact_email: String,
+    /// Who the first person in the bundled sign-in service is; the contact address by default.
+    #[arg(long)]
+    admin_email: Option<String>,
     /// Verified release directory from `thelve release fetch-gcp-preview`.
     #[arg(long)]
     release_dir: PathBuf,
@@ -845,6 +849,7 @@ pub fn execute(cli: Cli) -> Result<()> {
             state_bucket: args.state_bucket,
             domains: args.domains.into_iter().collect(),
             tls_contact_email: args.tls_contact_email,
+            administrator_email: args.admin_email,
             release_dir: args.release_dir,
             issuer_url: args.issuer_url,
             issuer_trust_sha256: args.issuer_trust_sha256,

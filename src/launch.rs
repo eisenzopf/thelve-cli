@@ -21,8 +21,10 @@ use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
+use zeroize::Zeroizing;
+
 use crate::config::{self, CloudDeployment, CloudProvider, TrustedIssuer};
-use crate::{activation, cloud, license, secrets, terraform};
+use crate::{activation, cloud, identity, license, secrets, terraform};
 
 pub const RECEIPT_SCHEMA: &str = "thelve.launch-receipt.v1";
 const TELNYX_SECRETS: [&str; 2] = ["telnyx-api-key", "telnyx-public-key"];
@@ -40,6 +42,9 @@ pub struct LaunchRequest {
     pub state_bucket: String,
     pub domains: BTreeMap<String, String>,
     pub tls_contact_email: String,
+    /// Who the first person in the bundled sign-in service is; the contact
+    /// address when the operator names nobody else.
+    pub administrator_email: Option<String>,
     pub release_dir: PathBuf,
     pub issuer_url: Option<String>,
     /// Pins the issuer's trust document; see `thelve license trust --expect-sha256`.
@@ -64,6 +69,7 @@ pub enum Step {
     Intent,
     BootstrapState,
     Prepare,
+    Domains,
     InternalSecrets,
     TelnyxSecrets,
     OidcClientSecret,
@@ -71,20 +77,23 @@ pub enum Step {
     License,
     RenderNodeConfig,
     Activate,
+    FirstAdministrator,
 }
 
 impl Step {
-    const ORDER: [Self; 10] = [
+    const ORDER: [Self; 12] = [
         Self::Doctor,
         Self::Intent,
         Self::BootstrapState,
         Self::Prepare,
+        Self::Domains,
         Self::InternalSecrets,
         Self::TelnyxSecrets,
         Self::Up,
         Self::License,
         Self::RenderNodeConfig,
         Self::Activate,
+        Self::FirstAdministrator,
     ];
 
     fn label(self) -> &'static str {
@@ -93,6 +102,7 @@ impl Step {
             Self::Intent => "deployment intent",
             Self::BootstrapState => "bootstrap-state",
             Self::Prepare => "prepare",
+            Self::Domains => "domain names",
             Self::InternalSecrets => "secret initialize-internal",
             Self::TelnyxSecrets => "telnyx secrets",
             Self::OidcClientSecret => "oidc client secret",
@@ -100,6 +110,7 @@ impl Step {
             Self::License => "licence",
             Self::RenderNodeConfig => "render-node-config",
             Self::Activate => "activate-gcp",
+            Self::FirstAdministrator => "first administrator",
         }
     }
 }
@@ -163,6 +174,7 @@ pub fn launch(request: &LaunchRequest) -> Result<()> {
         bail!("--tls-contact-email must be a real operator address for ACME notices");
     }
     let mut receipt = Receipt::load_or_new(&request.receipt, request)?;
+    let mut first_administrator = None;
     for step in Step::ORDER {
         if let Some(at) = receipt.completed.get(&step) {
             println!(
@@ -183,14 +195,26 @@ pub fn launch(request: &LaunchRequest) -> Result<()> {
             Step::Prepare => {
                 terraform::apply(&request.config, terraform::HostState::Stopped, false)?
             }
+            Step::Domains => assign_domains(request)?,
             Step::InternalSecrets => {
                 secrets::initialize_internal(&request.config, &config::load(&request.config)?)?;
             }
             Step::TelnyxSecrets => {
                 let intent = config::load(&request.config)?;
-                for name in TELNYX_SECRETS {
-                    let value = secrets::read_hidden(&format!("{name}: "))?;
-                    secrets::set(&request.config, &intent, name, value)?;
+                let workspace = terraform::workspace(&request.config, &intent)?;
+                // Values an operator already provided, by an earlier run or
+                // with `thelve secret set`, are left exactly as they are: a
+                // launch that can be resumed must not ask twice, and must
+                // never overwrite a working credential with a typo.
+                if secrets::versions_exist(&intent, &workspace, &TELNYX_SECRETS)? {
+                    println!(
+                        "launch: the Telnyx values already exist in this project's secret store; keeping them"
+                    );
+                } else {
+                    for name in TELNYX_SECRETS {
+                        let value = secrets::read_hidden(&format!("{name}: "))?;
+                        secrets::set(&request.config, &intent, name, value)?;
+                    }
                 }
             }
             Step::OidcClientSecret => {
@@ -230,12 +254,98 @@ pub fn launch(request: &LaunchRequest) -> Result<()> {
                     &request.activation_receipt,
                 )?;
             }
+            Step::FirstAdministrator => {
+                first_administrator = create_first_administrator(request)?;
+            }
         }
         receipt.record(&request.receipt, step)?;
     }
     terraform::status(&request.config)?;
-    print_next_steps(request);
+    print_next_steps(request, first_administrator.as_ref());
     Ok(())
+}
+
+/// Give the appliance the names its certificates and sign-in service use.
+///
+/// An operator who has DNS ready passes `--domain`; the intent then keeps
+/// exactly what they wrote. Everyone else gets working names without owning a
+/// domain or waiting for a record to propagate: the appliance's own static
+/// address, spelled as an `sslip.io` host, which resolves to that address for
+/// anybody. Real names are a later change, not a precondition for a first
+/// install.
+fn assign_domains(request: &LaunchRequest) -> Result<()> {
+    let mut intent = config::load(&request.config)?;
+    if !intent.spec.domains.is_empty() {
+        println!(
+            "launch: keeping the domain names in {}",
+            request.config.display()
+        );
+        return Ok(());
+    }
+    let outputs = terraform::outputs(&request.config, &intent)?;
+    let address = outputs
+        .get("public_ip")
+        .and_then(|output| output.get("value"))
+        .and_then(serde_json::Value::as_str)
+        .context("the appliance has no static address yet; `prepare` creates it")?;
+    intent.spec.domains = default_domains(address)?;
+    intent.validate()?;
+    config::rewrite(&request.config, &intent)?;
+    for (name, host) in &intent.spec.domains {
+        println!("launch: {name} is https://{host}");
+    }
+    println!(
+        "launch: these names resolve to this appliance's own address for anyone, so no DNS record is needed. Your own names can replace them later."
+    );
+    Ok(())
+}
+
+/// The four names an appliance answers on, derived from its address.
+/// `app-203-0-113-7.sslip.io` resolves to `203.0.113.7`, so a first install
+/// has working public certificates with no zone, registrar, or record.
+fn default_domains(address: &str) -> Result<BTreeMap<String, String>> {
+    let octets: Vec<&str> = address.split('.').collect();
+    if octets.len() != 4 || octets.iter().any(|octet| octet.parse::<u8>().is_err()) {
+        bail!("the appliance's address {address:?} is not an IPv4 address");
+    }
+    let dashed = octets.join("-");
+    Ok([
+        ("app", "app"),
+        ("api", "control"),
+        ("media", "realtime"),
+        ("sip", "sip"),
+    ]
+    .into_iter()
+    .map(|(key, prefix)| (key.to_owned(), format!("{prefix}-{dashed}.sslip.io")))
+    .collect())
+}
+
+/// Create the first person in the appliance's own sign-in service, so the
+/// operator can open the desk straight away. Only for bundled sign-in: with
+/// the customer's own provider, their people already exist.
+fn create_first_administrator(
+    request: &LaunchRequest,
+) -> Result<Option<(identity::FirstAdministrator, Zeroizing<String>)>> {
+    let intent = config::load(&request.config)?;
+    if intent.spec.identity != config::IdentityIntent::BundledKeycloak {
+        println!(
+            "launch: sign-in is your own provider, so the people who may open the desk are already yours"
+        );
+        return Ok(None);
+    }
+    let app = intent
+        .spec
+        .domains
+        .get("app")
+        .context("the intent has no app domain")?
+        .clone();
+    let email = request
+        .administrator_email
+        .clone()
+        .unwrap_or_else(|| request.tls_contact_email.clone());
+    let (outcome, password) =
+        identity::create_first_administrator(&request.config, &intent, &app, &email)?;
+    Ok(Some((outcome, password)))
 }
 
 /// The runbook's "edit deployment.yaml" step, done from arguments. An
@@ -359,39 +469,49 @@ pub fn installation_tenant_id(name: &str) -> uuid::Uuid {
     )
 }
 
-fn print_next_steps(request: &LaunchRequest) {
-    let app = request.domains.get("app").map_or_else(
-        || "the app domain".to_owned(),
-        |domain| format!("https://{domain}"),
-    );
-    let licensed = config::load(&request.config)
-        .ok()
+fn print_next_steps(
+    request: &LaunchRequest,
+    first_administrator: Option<&(identity::FirstAdministrator, Zeroizing<String>)>,
+) {
+    let intent = config::load(&request.config).ok();
+    let app = intent
+        .as_ref()
+        .and_then(|intent| intent.spec.domains.get("app"))
+        .map_or_else(
+            || "the app domain".to_owned(),
+            |domain| format!("https://{domain}"),
+        );
+    let licensed = intent
+        .as_ref()
         .is_some_and(|intent| intent.spec.licensing.certificate.is_some());
     println!();
     println!("launch complete. Next:");
-    let bundled = config::load(&request.config)
-        .ok()
-        .is_some_and(|intent| intent.spec.identity == config::IdentityIntent::BundledKeycloak);
-    if bundled {
-        let secret = format!("{}-keycloak-bootstrap-admin-password", request.name);
-        println!(
-            "  0. Create the first person: open {app}/sso/admin/ and sign in as thelve-bootstrap. The password is the secret {secret} in your cloud project (GCP: gcloud secrets versions access latest --secret={secret}{}). In the Thelve realm, add a user with an email and a temporary password.",
-            request
-                .project
-                .as_deref()
-                .map_or_else(String::new, |project| format!(" --project={project}"))
-        );
+    match first_administrator {
+        Some((identity::FirstAdministrator::Created { username }, password)) => {
+            println!("  1. Open {app} and sign in:");
+            println!("       who:      {username}");
+            println!("       password: {}", password.as_str());
+            println!(
+                "     This password is temporary and shown only here; sign-in asks for a new one straight away. The first person to sign in becomes the first administrator."
+            );
+        }
+        Some((identity::FirstAdministrator::AlreadyExists { username }, _)) => {
+            println!(
+                "  1. Open {app} and sign in as {username}, who already exists in this installation's sign-in service."
+            );
+        }
+        None => {
+            println!(
+                "  1. Open {app} and sign in with your own identity provider; the first person to sign in becomes the first administrator."
+            );
+        }
     }
     if licensed {
-        println!(
-            "  1. Open {app} and sign in as that person; the desk makes the first sign-in the first administrator. Then finish the checklist: telephony. The licence is installed."
-        );
+        println!("  2. Finish the checklist: telephony. The licence is installed.");
     } else {
+        println!("  2. Finish the checklist: telephony, licence.");
         println!(
-            "  1. Open {app} and complete the setup checklist: first administrator, sign-in, telephony, licence."
-        );
-        println!(
-            "  2. This installation's tenant id is {}; install its licence with: thelve license install --config {} --certificate licence.json --release-dir {} --tls-contact-email {} --approve",
+            "     This installation's tenant id is {}; install its licence with: thelve license install --config {} --certificate licence.json --release-dir {} --tls-contact-email {} --approve",
             installation_tenant_id(&request.name),
             request.config.display(),
             request.release_dir.display(),
@@ -437,6 +557,7 @@ mod tests {
             state_bucket: "bucket".into(),
             domains: BTreeMap::new(),
             tls_contact_email: "operator@example.com".into(),
+            administrator_email: None,
             release_dir: directory.join("release"),
             issuer_url: None,
             issuer_trust_sha256: None,
@@ -489,6 +610,7 @@ mod tests {
             .map(|(key, value)| (key.to_owned(), value.to_owned()))
             .collect(),
             tls_contact_email: "operator@example.com".into(),
+            administrator_email: None,
             release_dir: directory.join("release"),
             issuer_url: None,
             issuer_trust_sha256: None,

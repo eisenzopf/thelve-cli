@@ -257,6 +257,26 @@ fn secret_write_plan(
     }
 }
 
+/// Whether every name already has a usable version, so a launch can skip a
+/// prompt for values an operator has already provided (by an earlier run, or
+/// with `thelve secret set` before the launch).
+///
+/// # Errors
+///
+/// Returns an error when the secret containers cannot be listed.
+pub fn versions_exist(
+    intent: &CloudDeployment,
+    directory: &std::path::Path,
+    names: &[&str],
+) -> Result<bool> {
+    let resources = terraform::secret_resources(directory, intent.spec.provider.kind())?;
+    Ok(names.iter().all(|name| {
+        resources
+            .get(*name)
+            .is_some_and(|resource| version_exists(&intent.spec.provider, resource))
+    }))
+}
+
 pub fn verify_required_versions(
     intent: &CloudDeployment,
     directory: std::path::PathBuf,

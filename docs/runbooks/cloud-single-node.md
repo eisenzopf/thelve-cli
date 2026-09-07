@@ -55,23 +55,33 @@ command. It takes as arguments what the sequence has the operator edit into
 same `--approve` gate, and records each completed step in
 `launch-receipt.json`; a stopped launch rerun with the same arguments resumes
 at the first incomplete step and never re-applies a completed one. The two
-Telnyx values are still typed at hidden prompts.
+Telnyx values are typed at hidden prompts the first time; a later run keeps
+what is already in the project's secret store rather than asking again.
 
 ```sh
 thelve launch --provider gcp --name thelve-test \
   --project PROJECT_ID --region us-west1 --zone us-west1-b \
   --host-image projects/PROJECT_ID/global/images/IMAGE_FROM_VERIFIED_CATALOG \
   --state-bucket UNIQUE-STATE-BUCKET \
-  --domain app=desk.example.com --domain api=api.example.com \
-  --domain media=media.example.com --domain sip=sip.example.com \
   --tls-contact-email operator@example.com \
   --release-dir verified-preview \
   --approve
 ```
 
-Sign-in is bundled: the appliance runs its own sign-in service under
-`https://desk.example.com/sso`, and the launch's next steps say how to
-create the first person in it. To use your own OpenID Connect provider
+**No DNS is required.** Without `--domain`, the appliance takes names from
+its own static address: `app-203-0-113-7.sslip.io` and its `control-`,
+`realtime-` and `sip-` siblings, which resolve to that address for anybody,
+so public certificates are issued and the desk opens minutes after the
+launch with no zone, registrar or record. Pass `--domain app=desk.example.com`
+(and `api`, `media`, `sip`) when you already own names and have pointed
+them at the address; the intent then keeps exactly what you wrote.
+
+Sign-in is bundled, and the launch creates the first person in it: it reads
+the bootstrap administrator's password from your own secret store, creates
+one user in the Thelve realm named by `--admin-email` (the contact address
+by default), and prints a temporary password once, at the end. Signing in
+with it asks for a new password immediately, and the first person to sign in
+becomes the first administrator. To use your own OpenID Connect provider
 instead, add `--oidc-issuer` and `--oidc-client-id`; the provider must
 issue proof-bound (DPoP) JWT access tokens that carry a `tenant` claim, which
 today means Keycloak or an equivalent, not a consumer Google or Microsoft
@@ -95,8 +105,9 @@ CLI never renders demo identity: there is no flag for it, and the appliance
 refuses to boot with it outside a preview render produced by the release
 tooling.
 
-It ends with `deploy status` and the next steps: open the app domain and
-complete the setup checklist (first administrator, sign-in, telephony).
+It ends with `deploy status` and the next steps: the app domain, the person
+to sign in as, that person's one-time password, and what is left on the
+setup checklist (telephony).
 `thelve license status` shows the certificate the intent carries. On AWS the launch stops after `up` with the node configuration
 rendered, because activation is GCP-only today.
 
