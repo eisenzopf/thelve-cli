@@ -66,6 +66,15 @@ struct LaunchArgs {
     name: String,
     #[arg(long)]
     project: Option<String>,
+    /// Google Cloud project holding Telnyx secrets for a local development appliance.
+    #[arg(long, requires_all = ["telnyx_api_key_secret", "telnyx_public_key_secret"])]
+    telnyx_gcp_project: Option<String>,
+    /// Secret Manager resource containing the Telnyx API key (local provider only).
+    #[arg(long, requires = "telnyx_gcp_project")]
+    telnyx_api_key_secret: Option<String>,
+    /// Secret Manager resource containing the Telnyx Ed25519 public key (local provider only).
+    #[arg(long, requires = "telnyx_gcp_project")]
+    telnyx_public_key_secret: Option<String>,
     #[arg(long)]
     region: Option<String>,
     #[arg(long)]
@@ -871,6 +880,9 @@ pub fn execute(cli: Cli) -> Result<()> {
                     issuer_url: args.issuer_url,
                     license_service_url: args.license_service_url,
                     issuer_trust_sha256: args.issuer_trust_sha256,
+                    telnyx_gcp_project: args.telnyx_gcp_project,
+                    telnyx_api_key_secret: args.telnyx_api_key_secret,
+                    telnyx_public_key_secret: args.telnyx_public_key_secret,
                     approve: args.approve,
                 });
             }

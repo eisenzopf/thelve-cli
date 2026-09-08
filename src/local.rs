@@ -19,6 +19,58 @@ pub struct Request {
     pub issuer_url: Option<String>,
     pub license_service_url: Option<String>,
     pub issuer_trust_sha256: Option<String>,
+    pub telnyx_gcp_project: Option<String>,
+    pub telnyx_api_key_secret: Option<String>,
+    pub telnyx_public_key_secret: Option<String>,
+}
+
+fn materialize_gcp_secret(project: &str, secret: &str, target: &Path) -> Result<()> {
+    let temporary = target.with_extension("incoming");
+    let _ = fs::remove_file(&temporary);
+    process::inherit(&CommandPlan::new("gcloud").args([
+        "secrets",
+        "versions",
+        "access",
+        "latest",
+        "--project",
+        project,
+        "--secret",
+        secret,
+        "--out-file",
+        &path(&temporary),
+    ]))?;
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+    fs::rename(temporary, target)?;
+    Ok(())
+}
+
+fn configure_local_telnyx(
+    request: &Request,
+    config: &mut Value,
+    secret_dir: &Path,
+) -> Result<bool> {
+    let values = match (
+        request.telnyx_gcp_project.as_deref(),
+        request.telnyx_api_key_secret.as_deref(),
+        request.telnyx_public_key_secret.as_deref(),
+    ) {
+        (None, None, None) => return Ok(false),
+        (Some(project), Some(api), Some(public)) => (project, api, public),
+        _ => bail!("local Telnyx setup requires the Google project and both secret names"),
+    };
+    for (id, secret) in [
+        ("telnyx-api-key", values.1),
+        ("telnyx-public-key", values.2),
+    ] {
+        materialize_gcp_secret(values.0, secret, &secret_dir.join(id))?;
+        let bindings = config["spec"]["secretBindings"]
+            .as_array_mut()
+            .context("node config has no secret bindings")?;
+        bindings.retain(|binding| binding["id"] != id);
+        bindings.push(json!({"id":id,"source":{"provider":"local_file","path":format!("/etc/thelve/secrets/{id}")}}));
+    }
+    Ok(true)
 }
 fn path(p: &Path) -> String {
     p.to_string_lossy().into_owned()
@@ -268,9 +320,14 @@ pub fn launch(request: Request) -> Result<()> {
             )?;
             json!({"trustedIssuers":trust["licensing"]["trustedIssuers"],"certificate":issued.certificate})
         };
+        configure_local_telnyx(&request, &mut config, &secret_dir)?;
         protected_write(&node_path, serde_yaml::to_string(&config)?.as_bytes())?;
     }
     let mut config: Value = serde_yaml::from_slice(&fs::read(&node_path)?)?;
+    let secret_dir = directory.join("secrets");
+    if configure_local_telnyx(&request, &mut config, &secret_dir)? {
+        fs::write(&node_path, serde_yaml::to_string(&config)?)?;
+    }
     if config["spec"]["releaseRef"].as_str()
         != Some(fs::read_to_string(release.join("release-ref"))?.trim())
     {
