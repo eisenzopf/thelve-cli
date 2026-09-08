@@ -1,11 +1,11 @@
 # Thelve CLI
 
-`thelve` is the cloud-only workstation client for deploying and operating a
-single-node Thelve appliance in a customer-owned Google Cloud project or AWS
-account. It embeds the reviewed infrastructure modules, uses the operator's
-existing `gcloud` or `aws` identity, and writes secret values directly to the
-provider secret manager. It never starts a Thelve application workload on the
-workstation.
+`thelve` is the workstation client for deploying and operating a single-node
+Thelve appliance in a customer-owned Google Cloud project or AWS account. Its
+developer-only local provider deploys a prebuilt release into Colima. It embeds
+the reviewed infrastructure modules, uses the operator's existing `gcloud` or
+`aws` identity, and writes cloud secret values directly to the provider secret
+manager.
 
 This repository is intentionally independent of private Thelve application
 crates. Product images, the host image, and release catalogs are immutable
@@ -86,3 +86,10 @@ the exact-plan workflow.
 The CLI is dual-licensed under Apache-2.0 or MIT. See [LICENSE-APACHE](LICENSE-APACHE)
 and [LICENSE-MIT](LICENSE-MIT). Report suspected vulnerabilities through the
 private process in [SECURITY.md](SECURITY.md), never through a public issue.
+
+## Local developer appliance
+
+The development CLI can launch a prebuilt Thelve release in Colima, including
+bundled sign-in and a real Rudeless licence. Private build tooling in the Thelve
+repository creates that release; the public CLI has no build command. See
+[the local development runbook](docs/runbooks/local-development.md).

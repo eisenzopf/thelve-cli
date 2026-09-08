@@ -303,7 +303,7 @@ fn assign_domains(request: &LaunchRequest) -> Result<()> {
 /// The four names an appliance answers on, derived from its address.
 /// `app-203-0-113-7.sslip.io` resolves to `203.0.113.7`, so a first install
 /// has working public certificates with no zone, registrar, or record.
-fn default_domains(address: &str) -> Result<BTreeMap<String, String>> {
+pub(crate) fn default_domains(address: &str) -> Result<BTreeMap<String, String>> {
     let octets: Vec<&str> = address.split('.').collect();
     if octets.len() != 4 || octets.iter().any(|octet| octet.parse::<u8>().is_err()) {
         bail!("the appliance's address {address:?} is not an IPv4 address");

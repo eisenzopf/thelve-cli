@@ -10,7 +10,11 @@ use crate::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "thelve", version, about = "Cloud-only Thelve deployment CLI")]
+#[command(
+    name = "thelve",
+    version,
+    about = "Thelve installation and administration CLI"
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -18,6 +22,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Administer a local appliance.
+    #[command(hide = true)]
+    Dev(crate::dev::DevArgs),
     /// Check cloud identity, permissions, and local deployment prerequisites.
     Doctor(DoctorArgs),
     /// Verify signed release, channel, and machine-image catalogs.
@@ -41,31 +48,41 @@ enum Command {
     Launch(Box<LaunchArgs>),
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum LaunchProvider {
+    Gcp,
+    Aws,
+    Local,
+}
+
 #[derive(Debug, Args)]
 struct LaunchArgs {
     #[arg(long, value_enum)]
-    provider: config::CloudProvider,
+    provider: LaunchProvider,
+    /// Persistent local appliance directory.
+    #[arg(long)]
+    local_dir: Option<PathBuf>,
     #[arg(long)]
     name: String,
     #[arg(long)]
     project: Option<String>,
     #[arg(long)]
-    region: String,
+    region: Option<String>,
     #[arg(long)]
-    zone: String,
+    zone: Option<String>,
     /// Exact host image from a verified machine-image catalog.
     #[arg(long)]
-    host_image: String,
+    host_image: Option<String>,
     /// Globally unique remote-state bucket.
     #[arg(long)]
-    state_bucket: String,
+    state_bucket: Option<String>,
     /// Domain assignments as key=host, e.g. app=desk.example.com; repeat for app, api, media, sip.
     /// Optional: without them the appliance uses sslip.io names for its own address, so no DNS is required.
     #[arg(long = "domain", value_parser = parse_domain)]
     domains: Vec<(String, String)>,
     /// Real operator address for ACME notices.
     #[arg(long)]
-    tls_contact_email: String,
+    tls_contact_email: Option<String>,
     /// Who the first person in the bundled sign-in service is; the contact address by default.
     #[arg(long)]
     admin_email: Option<String>,
@@ -625,6 +642,7 @@ enum SecretCommand {
 
 pub fn execute(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Dev(args) => crate::dev::execute(args),
         Command::Doctor(args) => cloud::doctor(args.provider, args.project, args.region),
         Command::Release(args) => match args.command {
             CatalogCommand::Verify {
@@ -838,29 +856,60 @@ pub fn execute(cli: Cli) -> Result<()> {
             }
         },
         Command::Agent(args) => execute_agent(args),
-        Command::Launch(args) => launch::launch(&launch::LaunchRequest {
-            identity: launch_identity(&args),
-            provider: args.provider,
-            name: args.name,
-            project: args.project,
-            region: args.region,
-            zone: args.zone,
-            host_image: args.host_image,
-            state_bucket: args.state_bucket,
-            domains: args.domains.into_iter().collect(),
-            tls_contact_email: args.tls_contact_email,
-            administrator_email: args.admin_email,
-            release_dir: args.release_dir,
-            issuer_url: args.issuer_url,
-            issuer_trust_sha256: args.issuer_trust_sha256,
-            license_service_url: args.license_service_url,
-            skip_license: args.skip_license,
-            config: args.config,
-            node_config: args.node_config,
-            activation_receipt: args.activation_receipt,
-            receipt: args.receipt,
-            approve: args.approve,
-        }),
+        Command::Launch(args) => {
+            if matches!(args.provider, LaunchProvider::Local) {
+                return crate::local::launch(crate::local::Request {
+                    name: args.name,
+                    directory: args
+                        .local_dir
+                        .unwrap_or_else(|| PathBuf::from(".thelve-local")),
+                    release: args.release_dir,
+                    email: args
+                        .admin_email
+                        .or(args.tls_contact_email)
+                        .context("--admin-email is required for a local launch")?,
+                    issuer_url: args.issuer_url,
+                    license_service_url: args.license_service_url,
+                    issuer_trust_sha256: args.issuer_trust_sha256,
+                    approve: args.approve,
+                });
+            }
+            launch::launch(&launch::LaunchRequest {
+                identity: launch_identity(&args),
+                provider: match args.provider {
+                    LaunchProvider::Gcp => config::CloudProvider::Gcp,
+                    LaunchProvider::Aws => config::CloudProvider::Aws,
+                    LaunchProvider::Local => unreachable!(),
+                },
+                name: args.name,
+                project: args.project,
+                region: args
+                    .region
+                    .context("--region is required for a cloud launch")?,
+                zone: args.zone.context("--zone is required for a cloud launch")?,
+                host_image: args
+                    .host_image
+                    .context("--host-image is required for a cloud launch")?,
+                state_bucket: args
+                    .state_bucket
+                    .context("--state-bucket is required for a cloud launch")?,
+                domains: args.domains.into_iter().collect(),
+                tls_contact_email: args
+                    .tls_contact_email
+                    .context("--tls-contact-email is required for a cloud launch")?,
+                administrator_email: args.admin_email,
+                release_dir: args.release_dir,
+                issuer_url: args.issuer_url,
+                issuer_trust_sha256: args.issuer_trust_sha256,
+                license_service_url: args.license_service_url,
+                skip_license: args.skip_license,
+                config: args.config,
+                node_config: args.node_config,
+                activation_receipt: args.activation_receipt,
+                receipt: args.receipt,
+                approve: args.approve,
+            })
+        }
         Command::License(args) => match args.command {
             LicenseCommand::Status { config } => {
                 let intent = config::load(&config)?;
@@ -1012,6 +1061,72 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn local_launch_does_not_require_cloud_infrastructure_flags() {
+        let cli = Cli::try_parse_from([
+            "thelve",
+            "launch",
+            "--provider",
+            "local",
+            "--name",
+            "local-test",
+            "--release-dir",
+            "/release",
+            "--admin-email",
+            "operator@example.com",
+            "--approve",
+        ])
+        .unwrap();
+        assert!(
+            matches!(cli.command, Command::Launch(args) if matches!(args.provider, LaunchProvider::Local))
+        );
+    }
+
+    #[test]
+    fn local_lifecycle_is_available_but_building_is_not() {
+        for action in ["status", "stop", "destroy"] {
+            assert!(
+                Cli::try_parse_from(["thelve", "dev", action, "--local-dir", "/appliance"]).is_ok()
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "thelve",
+                "dev",
+                "release",
+                "build",
+                "--source",
+                "/source",
+                "--reference-release",
+                "/reference",
+                "--output",
+                "/release"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn local_install_has_no_source_or_issuer_build_options() {
+        for option in ["--source", "--local-license"] {
+            assert!(
+                Cli::try_parse_from([
+                    "thelve",
+                    "launch",
+                    "--provider",
+                    "local",
+                    "--name",
+                    "local-test",
+                    "--release-dir",
+                    "/release",
+                    option,
+                    "/source"
+                ])
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn destructive_operations_require_explicit_approval() {

@@ -72,24 +72,34 @@ fn temporary_password() -> Zeroizing<String> {
 /// Read the bootstrap administrator's password from the cloud secret store.
 /// The value stays in memory, is used for one token request, and is never
 /// written to a file, argv, or a log line.
-fn bootstrap_password(config_path: &Path, intent: &CloudDeployment) -> Result<Zeroizing<String>> {
+fn cloud_secret(
+    config_path: &Path,
+    intent: &CloudDeployment,
+    secret: &str,
+) -> Result<Zeroizing<String>> {
     let directory = terraform::workspace(config_path, intent)?;
     let resources = terraform::secret_resources(&directory, intent.spec.provider.kind())?;
-    let resource = resources.get(BOOTSTRAP_SECRET).with_context(|| {
-        format!("secret container {BOOTSTRAP_SECRET:?} does not exist; run `thelve deploy prepare` first")
+    let resource = resources.get(secret).with_context(|| {
+        format!("secret container {secret:?} does not exist; run `thelve deploy prepare` first")
     })?;
     let plan = match &intent.spec.provider {
-        Provider::Gcp { project_id, .. } => CommandPlan::new("gcloud").args([
-            "secrets",
-            "versions",
-            "access",
-            "latest",
-            "--secret",
-            resource,
-            "--project",
-            project_id,
-            "--quiet",
-        ]),
+        Provider::Gcp { project_id, .. } => {
+            // Terraform reports the fully qualified resource; `gcloud` takes
+            // the short id beside `--project`.
+            let secret_id = crate::secrets::gcp_secret_id(project_id, resource)
+                .with_context(|| format!("secret resource {resource:?} is not in this project"))?;
+            CommandPlan::new("gcloud").args([
+                "secrets",
+                "versions",
+                "access",
+                "latest",
+                "--secret",
+                secret_id,
+                "--project",
+                project_id,
+                "--quiet",
+            ])
+        }
         Provider::Aws { region, .. } => CommandPlan::new("aws").args([
             "secretsmanager",
             "get-secret-value",
@@ -129,7 +139,18 @@ pub fn create_first_administrator(
 ) -> Result<(FirstAdministrator, Zeroizing<String>)> {
     let base = format!("https://{app_domain}/sso");
     let http = client()?;
-    let password = bootstrap_password(config_path, intent)?;
+    let password = cloud_secret(config_path, intent, BOOTSTRAP_SECRET)?;
+    let policy_secret = cloud_secret(config_path, intent, "oidc/client-secret")?;
+    create_administrator(&http, &base, email, password, &policy_secret)
+}
+
+pub(crate) fn create_administrator(
+    http: &reqwest::blocking::Client,
+    base: &str,
+    email: &str,
+    password: Zeroizing<String>,
+    policy_secret: &str,
+) -> Result<(FirstAdministrator, Zeroizing<String>)> {
     let token: TokenResponse = http
         .post(format!(
             "{base}/realms/master/protocol/openid-connect/token"
@@ -147,6 +168,16 @@ pub fn create_first_administrator(
         .json()
         .context("read the sign-in service's token answer")?;
     drop(password);
+    configure_session_client(http, base, &token.access_token, policy_secret)?;
+    // Realm imports leave existing realms untouched. Reconcile presentation for
+    // appliances upgraded to a node artifact that carries the Thelve theme.
+    http.put(format!("{base}/admin/realms/{REALM}"))
+        .bearer_auth(&token.access_token)
+        .json(&serde_json::json!({"displayName": "Thelve", "loginTheme": "thelve"}))
+        .send()
+        .context("configure Thelve sign-in presentation")?
+        .error_for_status()
+        .context("the sign-in service refused Thelve presentation settings")?;
     let temporary = temporary_password();
     let response = http
         .post(format!("{base}/admin/realms/{REALM}/users"))
@@ -184,6 +215,130 @@ pub fn create_first_administrator(
     ))
 }
 
+/// Reconcile a confidential backend client without resetting the realm's policy.
+fn configure_session_client(
+    http: &reqwest::blocking::Client,
+    base: &str,
+    token: &str,
+    secret: &str,
+) -> Result<()> {
+    let root = format!("{base}/admin/realms/{REALM}");
+    let clients: Vec<serde_json::Value> = http
+        .get(format!("{root}/clients"))
+        .query(&[("clientId", "thelve-session-policy")])
+        .bearer_auth(token)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let spec = serde_json::json!({
+        "clientId": "thelve-session-policy", "enabled": true,
+        "protocol": "openid-connect", "publicClient": false,
+        "secret": secret, "serviceAccountsEnabled": true,
+        "standardFlowEnabled": false, "directAccessGrantsEnabled": false,
+        "fullScopeAllowed": true
+    });
+    if let Some(client) = clients.first() {
+        let id = client["id"].as_str().context("session client ID missing")?;
+        http.put(format!("{root}/clients/{id}"))
+            .bearer_auth(token)
+            .json(&spec)
+            .send()?
+            .error_for_status()?;
+    } else {
+        http.post(format!("{root}/clients"))
+            .bearer_auth(token)
+            .json(&spec)
+            .send()?
+            .error_for_status()?;
+    }
+    let clients: Vec<serde_json::Value> = http
+        .get(format!("{root}/clients"))
+        .query(&[("clientId", "thelve-session-policy")])
+        .bearer_auth(token)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let id = clients
+        .first()
+        .and_then(|c| c["id"].as_str())
+        .context("session client missing")?;
+    let account: serde_json::Value = http
+        .get(format!("{root}/clients/{id}/service-account-user"))
+        .bearer_auth(token)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let user = account["id"]
+        .as_str()
+        .context("session service account missing")?;
+    let managers: Vec<serde_json::Value> = http
+        .get(format!("{root}/clients"))
+        .query(&[("clientId", "realm-management")])
+        .bearer_auth(token)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let manager = managers
+        .first()
+        .and_then(|c| c["id"].as_str())
+        .context("realm management missing")?;
+    let mut roles = Vec::new();
+    for role in ["view-realm", "manage-realm", "manage-users"] {
+        let value: serde_json::Value = http
+            .get(format!("{root}/clients/{manager}/roles/{role}"))
+            .bearer_auth(token)
+            .send()?
+            .error_for_status()?
+            .json()?;
+        roles.push(value);
+    }
+    http.post(format!(
+        "{root}/users/{user}/role-mappings/clients/{manager}"
+    ))
+    .bearer_auth(token)
+    .json(&roles)
+    .send()?
+    .error_for_status()?;
+    Ok(())
+}
+
+/// Resolve the issuer's stable subject after the administrator was created.
+pub(crate) fn administrator_subject(
+    http: &reqwest::blocking::Client,
+    base: &str,
+    email: &str,
+    password: &str,
+) -> Result<String> {
+    let token: TokenResponse = http
+        .post(format!(
+            "{base}/realms/master/protocol/openid-connect/token"
+        ))
+        .form(&[
+            ("grant_type", "password"),
+            ("client_id", "admin-cli"),
+            ("username", BOOTSTRAP_USERNAME),
+            ("password", password),
+        ])
+        .send()?
+        .error_for_status()?
+        .json()?;
+    let users: Vec<serde_json::Value> = http
+        .get(format!("{base}/admin/realms/{REALM}/users"))
+        .query(&[("username", email), ("exact", "true")])
+        .bearer_auth(&token.access_token)
+        .send()?
+        .error_for_status()?
+        .json()?;
+    if users.len() != 1 {
+        bail!("initial administrator does not resolve to exactly one identity");
+    }
+    let subject = users[0]["id"]
+        .as_str()
+        .context("administrator identity has no subject")?;
+    uuid::Uuid::parse_str(subject).context("bundled administrator subject is not a UUID")?;
+    Ok(subject.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,7 +355,11 @@ mod tests {
                     || character == '_'),
             "a password an operator retypes must survive a copy through a terminal"
         );
-        assert_ne!(*value, *temporary_password(), "each launch generates its own");
+        assert_ne!(
+            *value,
+            *temporary_password(),
+            "each launch generates its own"
+        );
     }
 
     #[test]

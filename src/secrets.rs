@@ -158,7 +158,7 @@ pub fn initialize_internal(config_path: &Path, intent: &CloudDeployment) -> Resu
     Ok(())
 }
 
-fn generated_internal_values(
+pub(crate) fn generated_internal_values(
     backup_destination: &str,
 ) -> Result<BTreeMap<String, Zeroizing<String>>> {
     if !(backup_destination.starts_with("gs://") || backup_destination.starts_with("s3://"))
@@ -347,7 +347,9 @@ fn version_exists(provider: &Provider, resource: &str) -> bool {
     }
 }
 
-fn gcp_secret_id<'a>(project_id: &str, resource: &'a str) -> Option<&'a str> {
+/// The short id `gcloud --secret` takes, from the fully qualified resource
+/// Terraform reports. Shared so every caller addresses a secret the same way.
+pub(crate) fn gcp_secret_id<'a>(project_id: &str, resource: &'a str) -> Option<&'a str> {
     let prefix = format!("projects/{project_id}/secrets/");
     let secret_id = resource.strip_prefix(&prefix)?;
     (!secret_id.is_empty() && !secret_id.contains('/')).then_some(secret_id)
