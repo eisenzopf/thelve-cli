@@ -12,6 +12,64 @@ use std::{
 const SIGNING_IDENTITY: &str = "https://github.com/eisenzopf/Thelve/.github/workflows/portable-appliance-candidate.yml@refs/heads/main";
 
 #[derive(Debug, Args)]
+pub struct CompleteSetupArgs {
+    #[arg(long, default_value = "/etc/thelve")]
+    configuration: PathBuf,
+    #[arg(long)]
+    admin_email: String,
+    #[arg(long)]
+    approve: bool,
+}
+
+pub fn complete_setup(args: CompleteSetupArgs) -> Result<()> {
+    ensure!(args.approve, "administrator setup requires --approve");
+    ensure!(
+        std::env::consts::OS == "linux",
+        "run setup on the Linux appliance host"
+    );
+    ensure!(
+        process::capture(&CommandPlan::new("id").arg("-u"))?.trim() == "0",
+        "run setup as root"
+    );
+    validate_administrator_email(&args.admin_email)?;
+    let context = process::capture(&CommandPlan::new("docker").args([
+        "context",
+        "inspect",
+        "--format",
+        "{{.Endpoints.docker.Host}}",
+    ]))?;
+    ensure!(
+        context.trim().starts_with("unix://") && std::env::var_os("DOCKER_HOST").is_none(),
+        "setup requires the local Docker Engine"
+    );
+    let configuration = args.configuration.canonicalize()?;
+    let inspected = process::capture(&CommandPlan::new("docker").args(["inspect", "thelve"]))?;
+    let inspected: serde_json::Value = serde_json::from_str(&inspected)?;
+    let container = &inspected[0];
+    ensure!(
+        container["State"]["Running"] == true,
+        "appliance is not running"
+    );
+    let mounts = container["Mounts"]
+        .as_array()
+        .context("appliance mounts unavailable")?;
+    ensure!(
+        mounts.iter().any(|mount| {
+            mount["Destination"] == "/etc/thelve"
+                && mount["Source"].as_str() == configuration.to_str()
+                && mount["RW"] == false
+        }),
+        "configuration is not the running appliance's read-only configuration"
+    );
+    let node: serde_json::Value =
+        serde_json::from_slice(&fs::read(configuration.join("node.json"))?)?;
+    let hostname = node["spec"]["domains"]["app"]
+        .as_str()
+        .context("installation hostname missing")?;
+    finish_administrator(&configuration, hostname, &args.admin_email)
+}
+
+#[derive(Debug, Args)]
 pub struct InstallArgs {
     /// Exact signed appliance image, including its sha256 manifest digest.
     #[arg(long)]
@@ -265,10 +323,7 @@ fn finish_administrator(
     hostname: &str,
     email: &str,
 ) -> Result<()> {
-    use std::{
-        io::{IsTerminal, Write},
-        os::unix::fs::OpenOptionsExt,
-    };
+    use std::io::IsTerminal;
     validate_administrator_email(email)?;
     let http = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -280,18 +335,17 @@ fn finish_administrator(
     )?;
     let policy =
         crate::secrets::read_private_file(&configuration.join("secrets/oidc--client-secret"))?;
-    let (result, temporary) =
-        crate::identity::create_administrator(&http, &base, email, bootstrap.clone(), &policy)?;
+    let handoff = configuration.join("initial-admin-password");
+    let temporary = prepare_administrator_password(&handoff)?;
+    let (result, temporary) = crate::identity::create_administrator_with_password(
+        &http,
+        &base,
+        email,
+        bootstrap.clone(),
+        &policy,
+        temporary,
+    )?;
     if matches!(result, crate::identity::FirstAdministrator::Created { .. }) {
-        let handoff = configuration.join("initial-admin-password");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&handoff)
-            .context("store temporary administrator password in protected handoff file")?;
-        file.write_all(temporary.as_bytes())?;
-        file.sync_all()?;
         write_interactive_password(
             &mut std::io::stdout().lock(),
             std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
@@ -320,6 +374,23 @@ fn finish_administrator(
     .context("could not link administrator to the installation tenant")?;
     println!("Administrator linked to the installation tenant.");
     Ok(())
+}
+
+fn prepare_administrator_password(path: &std::path::Path) -> Result<zeroize::Zeroizing<String>> {
+    use std::io::Write;
+    if fs::symlink_metadata(path).is_ok() {
+        return crate::secrets::read_private_file(path);
+    }
+    let parent = path.parent().context("password handoff parent required")?;
+    let password = crate::identity::temporary_password();
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.write_all(password.as_bytes())?;
+    staged.as_file().sync_all()?;
+    staged
+        .persist_noclobber(path)
+        .context("save protected administrator password before account creation")?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(password)
 }
 
 fn write_interactive_password(
@@ -512,6 +583,21 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn administrator_password_handoff_survives_retry_without_rotation() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("password");
+        let initial = prepare_administrator_password(&path).unwrap();
+        assert_eq!(
+            prepare_administrator_password(&path).unwrap().as_str(),
+            initial.as_str()
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
     #[test]
     fn temporary_password_is_not_printed_by_noninteractive_installs() {
         let sentinel = "synthetic-temporary-password";
