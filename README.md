@@ -61,6 +61,47 @@ qualification. The intended familiar installation command is
 until that formula is accepted operators install the exact verified GitHub
 Release asset documented with the release.
 
+## Linux container installation (release testing)
+
+`thelve install` runs on the Linux appliance host as root and downloads an
+existing image; it does not compile application code. Docker Engine and
+`cosign` must already be installed. This path is under release qualification;
+a successful compilation alone does not qualify an image for installation.
+
+Supply an exact digest-pinned image signed by the Thelve candidate workflow
+and the corresponding signed release directory:
+
+```sh
+sudo thelve install \
+  --image REGISTRY/REPOSITORY/IMAGE@sha256:DIGEST \
+  --hostname thelve.example.com \
+  --public-ip 203.0.113.10 \
+  --contact-email operator@example.com \
+  --admin-email admin@example.com \
+  --release-directory /path/to/verified-release \
+  --approve
+```
+
+Replace the example values with the published release identity and your host's
+settings. Configure DNS for the hostname and its `api.` and `media.` subdomains
+before installation. Existing nonempty configuration or data is refused, not
+overwritten. Fresh configuration contains no Telnyx or Vapi credentials.
+
+The administrator email is separate from the licensing contact. The CLI
+generates a temporary password, shows it only in an interactive terminal, and
+saves an owner-only recovery copy at `/etc/thelve/initial-admin-password`.
+Keycloak requires a password change at first login. Do not capture an
+interactive installation in a terminal recording. After changing the password,
+remove the obsolete recovery copy. An interrupted administrator setup can be
+resumed without reinstalling the appliance:
+
+```sh
+sudo thelve complete-setup --admin-email admin@example.com --approve
+```
+
+This command does not reset an existing administrator's password. Keep the
+same administrator email when resuming setup.
+
 ## Developer verification
 
 ```sh
