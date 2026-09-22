@@ -10,6 +10,41 @@ use std::{
 };
 
 const SIGNING_IDENTITY: &str = "https://github.com/eisenzopf/Thelve/.github/workflows/portable-appliance-candidate.yml@refs/heads/main";
+const RELEASE_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEd3EBPcmusyL/6aY9u3/exrRbseOk\nftW59WagO5goZxLxobYSGSz5EtYCB+ePvtsGDnErbwidonJ8hmEbYqZFBQ==\n-----END PUBLIC KEY-----\n";
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ImageSigner {
+    Github,
+    ReleaseKey,
+}
+
+fn verify_image(image: &str, signer: ImageSigner) -> Result<()> {
+    use std::io::Write;
+    let mut key = tempfile::NamedTempFile::new()?;
+    let plan = match signer {
+        ImageSigner::Github => CommandPlan::new("cosign").args([
+            "verify",
+            "--certificate-identity",
+            SIGNING_IDENTITY,
+            "--certificate-oidc-issuer",
+            "https://token.actions.githubusercontent.com",
+            image,
+        ]),
+        ImageSigner::ReleaseKey => {
+            key.write_all(RELEASE_PUBLIC_KEY.as_bytes())?;
+            key.flush()?;
+            CommandPlan::new("cosign").args([
+                "verify",
+                "--key",
+                key.path()
+                    .to_str()
+                    .context("public key path is not UTF-8")?,
+                image,
+            ])
+        }
+    };
+    process::inherit(&plan)
+}
 
 #[derive(Debug, Args)]
 pub struct CompleteSetupArgs {
@@ -74,6 +109,9 @@ pub struct InstallArgs {
     /// Exact signed appliance image, including its sha256 manifest digest.
     #[arg(long)]
     image: String,
+    /// Select a pinned trusted signer; never accepts an arbitrary public key.
+    #[arg(long, value_enum, default_value = "github")]
+    image_signer: ImageSigner,
     /// Prepared appliance configuration, signed release documents, and secret files.
     #[arg(long, default_value = "/etc/thelve")]
     configuration: PathBuf,
@@ -194,14 +232,7 @@ pub fn install(args: InstallArgs) -> Result<()> {
             "data directory must be empty; refusing to overwrite or adopt existing data"
         );
     }
-    process::inherit(&CommandPlan::new("cosign").args([
-        "verify",
-        "--certificate-identity",
-        SIGNING_IDENTITY,
-        "--certificate-oidc-issuer",
-        "https://token.actions.githubusercontent.com",
-        &args.image,
-    ]))?;
+    verify_image(&args.image, args.image_signer)?;
     process::inherit(&CommandPlan::new("docker").args(["pull", &args.image]))?;
     let digests = process::capture(&CommandPlan::new("docker").args([
         "image",
@@ -587,6 +618,29 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn image_signers_are_explicit_and_closed() {
+        use clap::{Command, FromArgMatches};
+        let parse = |extra: &[&str]| {
+            let command = InstallArgs::augment_args(Command::new("install"));
+            let mut arguments = vec![
+                "install",
+                "--image",
+                "example.invalid/appliance@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ];
+            arguments.extend_from_slice(extra);
+            command.try_get_matches_from(arguments)
+        };
+        let defaults = InstallArgs::from_arg_matches(&parse(&[]).unwrap()).unwrap();
+        assert!(matches!(defaults.image_signer, ImageSigner::Github));
+        let release =
+            InstallArgs::from_arg_matches(&parse(&["--image-signer", "release-key"]).unwrap())
+                .unwrap();
+        assert!(matches!(release.image_signer, ImageSigner::ReleaseKey));
+        assert!(parse(&["--image-signer", "unverified"]).is_err());
+        assert!(parse(&["--key", "/tmp/arbitrary.pub"]).is_err());
+    }
+
     #[test]
     fn administrator_password_handoff_survives_retry_without_rotation() {
         use std::os::unix::fs::PermissionsExt;
