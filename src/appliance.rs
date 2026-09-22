@@ -24,6 +24,9 @@ pub struct InstallArgs {
     hostname: Option<String>,
     #[arg(long, requires = "hostname")]
     contact_email: Option<String>,
+    /// Create and link the first administrator (separate from licensing contact).
+    #[arg(long, requires = "hostname")]
+    admin_email: Option<String>,
     #[arg(long, requires = "hostname")]
     public_ip: Option<std::net::Ipv4Addr>,
     #[arg(long, requires = "hostname")]
@@ -97,6 +100,9 @@ pub fn install(args: InstallArgs) -> Result<()> {
         "run the installer on the target Linux host"
     );
     validate_image(&args.image)?;
+    if let Some(email) = &args.admin_email {
+        validate_administrator_email(email)?;
+    }
     ensure!(
         process::capture(&CommandPlan::new("id").arg("-u"))?.trim() == "0",
         "run the installer as root"
@@ -213,6 +219,13 @@ pub fn install(args: InstallArgs) -> Result<()> {
             "appliance stopped before readiness; inspect docker logs thelve (configuration and data retained)"
         );
         if state["Health"]["Status"] == "healthy" {
+            if let Some(email) = &args.admin_email {
+                finish_administrator(
+                    &configuration,
+                    args.hostname.as_deref().context("hostname required")?,
+                    email,
+                )?;
+            }
             println!(
                 "Thelve appliance is healthy. Complete administrator setup at your configured HTTPS hostname."
             );
@@ -228,6 +241,97 @@ pub fn install(args: InstallArgs) -> Result<()> {
 fn installation_name(hostname: &str) -> String {
     use sha2::{Digest as _, Sha256};
     format!("thelve-{:x}", Sha256::digest(hostname.as_bytes()))[..39].to_owned()
+}
+
+fn validate_administrator_email(email: &str) -> Result<()> {
+    let (local, domain) = email
+        .split_once('@')
+        .context("valid administrator email required")?;
+    ensure!(
+        !local.is_empty()
+            && domain.contains('.')
+            && !domain.contains('@')
+            && !domain.starts_with('.')
+            && !domain.ends_with('.')
+            && email.len() <= 254
+            && !email.chars().any(char::is_whitespace),
+        "valid administrator email required"
+    );
+    Ok(())
+}
+
+fn finish_administrator(
+    configuration: &std::path::Path,
+    hostname: &str,
+    email: &str,
+) -> Result<()> {
+    use std::{
+        io::{IsTerminal, Write},
+        os::unix::fs::OpenOptionsExt,
+    };
+    validate_administrator_email(email)?;
+    let http = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(45))
+        .build()?;
+    let base = format!("https://{hostname}/sso");
+    let bootstrap = crate::secrets::read_private_file(
+        &configuration.join("secrets/keycloak-bootstrap-admin-password"),
+    )?;
+    let policy =
+        crate::secrets::read_private_file(&configuration.join("secrets/oidc--client-secret"))?;
+    let (result, temporary) =
+        crate::identity::create_administrator(&http, &base, email, bootstrap.clone(), &policy)?;
+    if matches!(result, crate::identity::FirstAdministrator::Created { .. }) {
+        let handoff = configuration.join("initial-admin-password");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&handoff)
+            .context("store temporary administrator password in protected handoff file")?;
+        file.write_all(temporary.as_bytes())?;
+        file.sync_all()?;
+        write_interactive_password(
+            &mut std::io::stdout().lock(),
+            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
+            &temporary,
+        )?;
+        println!(
+            "Temporary administrator password saved to {} (owner-only); change it at first sign-in.",
+            handoff.display()
+        );
+    }
+    let subject = crate::identity::administrator_subject(&http, &base, email, &bootstrap)?;
+    let identity = serde_json::json!({
+        "issuer": format!("{base}/realms/thelve"), "subject": subject,
+        "user_name": email, "email": email,
+    });
+    process::with_secret_stdin(
+        &CommandPlan::new("docker").args([
+            "exec",
+            "-i",
+            "thelve",
+            "thelve-control-api",
+            "bootstrap-administrator",
+        ]),
+        &serde_json::to_vec(&identity)?,
+    )
+    .context("could not link administrator to the installation tenant")?;
+    println!("Administrator linked to the installation tenant.");
+    Ok(())
+}
+
+fn write_interactive_password(
+    output: &mut impl std::io::Write,
+    interactive: bool,
+    password: &str,
+) -> Result<()> {
+    if interactive {
+        writeln!(output, "Temporary administrator password: {password}")?;
+        output.flush()?;
+    }
+    Ok(())
 }
 
 fn prepare_configuration(args: &InstallArgs) -> Result<()> {
@@ -408,6 +512,29 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn temporary_password_is_not_printed_by_noninteractive_installs() {
+        let sentinel = "synthetic-temporary-password";
+        let mut output = Vec::new();
+        write_interactive_password(&mut output, false, sentinel).unwrap();
+        assert!(output.is_empty());
+        write_interactive_password(&mut output, true, sentinel).unwrap();
+        assert!(String::from_utf8(output).unwrap().contains(sentinel));
+    }
+    #[test]
+    fn administrator_identity_is_validated_before_installation() {
+        assert!(validate_administrator_email("admin@example.com").is_ok());
+        for invalid in [
+            "",
+            "@example.com",
+            "a@@example.com",
+            "a@",
+            "a@.com",
+            "a@example.com\n",
+        ] {
+            assert!(validate_administrator_email(invalid).is_err());
+        }
+    }
     #[test]
     fn installation_names_are_stable_and_bounded_for_long_hostnames() {
         let hostname = format!("{}.{}.example.com", "a".repeat(63), "b".repeat(63));
