@@ -255,6 +255,15 @@ pub fn upgrade(args: UpgradeArgs) -> Result<()> {
         .to_str()
         .context("configuration path invalid")?;
     let data_text = data.to_str().context("data path invalid")?;
+    // Validate the complete replacement command before causing any downtime.
+    let mut plan = appliance::run_plan(&args.image, configuration_text, data_text)?;
+    let env_index = plan
+        .args
+        .iter()
+        .position(|value| value == "--env-file")
+        .context("upgrade environment option missing")?;
+    plan.args[env_index + 1] = backup.join("candidate.env").to_string_lossy().into_owned();
+    appliance::configure_test_candidate(&mut plan)?;
     // Stop before snapshotting PostgreSQL. If snapshot fails, restart the unchanged container.
     process::inherit(&docker(&["stop", "--time", "120", "thelve"]))?;
     let snapshot = process::inherit(&CommandPlan::new("tar").args([
@@ -280,14 +289,6 @@ pub fn upgrade(args: UpgradeArgs) -> Result<()> {
         let _ = process::inherit(&docker(&["start", "thelve"]));
         return Err(error.context("rename failed; attempted restart of unchanged appliance"));
     }
-    let mut plan = appliance::run_plan(&args.image, configuration_text, data_text)?;
-    let env_index = plan
-        .args
-        .iter()
-        .position(|value| value == "--env-file")
-        .context("upgrade environment option missing")?;
-    plan.args[env_index + 1] = backup.join("candidate.env").to_string_lossy().into_owned();
-    appliance::configure_test_candidate(&mut plan)?;
     // No automatic rollback after starting a new image: database migrations may have run.
     process::inherit(&plan).with_context(|| {
         format!(
