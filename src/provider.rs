@@ -34,6 +34,9 @@ struct ConfigureArgs {
 
 pub fn run(args: ProviderArgs) -> Result<()> {
     let ProviderCommand::Configure(args) = args.command;
+    if let Some(name) = &args.key_env {
+        process::exclude_secret_environment(name)?;
+    }
     ensure!(
         std::env::consts::OS == "linux",
         "run provider configuration on the Linux appliance host"
