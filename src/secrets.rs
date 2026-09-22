@@ -54,6 +54,7 @@ pub fn read_environment(name: &str) -> Result<Zeroizing<String>> {
     {
         bail!("secret environment variable name is invalid");
     }
+    process::exclude_secret_environment(name)?;
     let value = std::env::var(name)
         .map_err(|_| anyhow::anyhow!("secret environment variable is missing or not UTF-8"))?;
     validate_value(value)
