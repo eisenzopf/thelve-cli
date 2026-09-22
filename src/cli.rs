@@ -26,6 +26,8 @@ enum Command {
     Install(crate::appliance::InstallArgs),
     /// Complete first-administrator setup on an already installed appliance.
     CompleteSetup(crate::appliance::CompleteSetupArgs),
+    /// Configure appliance provider keys using a hidden prompt, file, or environment.
+    Provider(crate::provider::ProviderArgs),
     /// Administer a local appliance.
     #[command(hide = true)]
     Dev(crate::dev::DevArgs),
@@ -663,6 +665,7 @@ pub fn execute(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Install(args) => crate::appliance::install(args),
         Command::CompleteSetup(args) => crate::appliance::complete_setup(args),
+        Command::Provider(args) => crate::provider::run(args),
         Command::Dev(args) => crate::dev::execute(args),
         Command::Doctor(args) => cloud::doctor(args.provider, args.project, args.region),
         Command::Release(args) => match args.command {

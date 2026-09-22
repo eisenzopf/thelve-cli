@@ -14,6 +14,7 @@ mod local;
 mod mcp;
 mod preview;
 mod process;
+mod provider;
 mod recovery;
 mod secrets;
 mod skills;
