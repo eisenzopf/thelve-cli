@@ -616,6 +616,16 @@ fn prepare_configuration(args: &InstallArgs) -> Result<()> {
         )?;
     }
     fs::remove_dir(stage.path().join("rendered"))?;
+    // The pinned Keycloak exposes health on management port 9000 by default,
+    // which belongs to MinIO in the single-container topology. The supervisor
+    // probes the existing loopback-only Keycloak HTTP interface instead.
+    {
+        use std::io::Write;
+        let mut environment = fs::OpenOptions::new()
+            .append(true)
+            .open(stage.path().join("appliance.env"))?;
+        environment.write_all(b"\nKC_LEGACY_OBSERVABILITY_INTERFACE=true\n")?;
+    }
     initialize_secrets(&stage.path().join("secrets"))?;
     fs::rename(stage.path(), &args.configuration)?;
     println!(
