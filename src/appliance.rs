@@ -112,6 +112,9 @@ pub struct InstallArgs {
     /// Select a pinned trusted signer; never accepts an arbitrary public key.
     #[arg(long, value_enum, default_value = "github")]
     image_signer: ImageSigner,
+    /// Blank-host qualification only: verify the image, but do not claim release qualification.
+    #[arg(long, requires = "hostname")]
+    signed_test_candidate: bool,
     /// Prepared appliance configuration, signed release documents, and secret files.
     #[arg(long, default_value = "/etc/thelve")]
     configuration: PathBuf,
@@ -186,6 +189,26 @@ fn run_plan(image: &str, configuration: &str, data: &str) -> Result<CommandPlan>
     ]))
 }
 
+fn configure_test_candidate(plan: &mut CommandPlan) -> Result<()> {
+    let image = plan.args.pop().context("container image missing")?;
+    validate_image(&image)?;
+    // The legacy in-image development switch skips release-document admission,
+    // not the host CLI's mandatory image signature and digest verification.
+    // Keep the real image identity in an explicit label; never claim promotion.
+    plan.args.extend([
+        "--label".into(),
+        "io.thelve.installation.status=signed-test-candidate".into(),
+        "--label".into(),
+        format!("io.thelve.installation.verified-image={image}"),
+        "--env".into(),
+        "THELVE_APPLIANCE_ALLOW_UNSIGNED_DEVELOPMENT=true".into(),
+        "--env".into(),
+        "THELVE_APPLIANCE_IMAGE_DIGEST=unqualified".into(),
+        image,
+    ]);
+    Ok(())
+}
+
 pub fn install(args: InstallArgs) -> Result<()> {
     ensure!(
         args.approve,
@@ -253,12 +276,14 @@ pub fn install(args: InstallArgs) -> Result<()> {
         .configuration
         .canonicalize()
         .context("configuration directory unavailable")?;
-    for file in [
-        "appliance.env",
-        "Caddyfile",
-        "release/portable-appliance-release.json",
-        "release/portable-appliance-release.signature.json",
-    ] {
+    let mut required_files = vec!["appliance.env", "Caddyfile"];
+    if !args.signed_test_candidate {
+        required_files.extend([
+            "release/portable-appliance-release.json",
+            "release/portable-appliance-release.signature.json",
+        ]);
+    }
+    for file in required_files {
         let metadata = fs::symlink_metadata(configuration.join(file))
             .with_context(|| format!("configuration lacks {file}"))?;
         ensure!(
@@ -286,13 +311,19 @@ pub fn install(args: InstallArgs) -> Result<()> {
     initialize_secrets(&configuration.join("secrets"))?;
     fs::create_dir_all(&args.data)?;
     let data = args.data.canonicalize()?;
-    let plan = run_plan(
+    let mut plan = run_plan(
         &args.image,
         configuration
             .to_str()
             .context("configuration path is not UTF-8")?,
         data.to_str().context("data path is not UTF-8")?,
     )?;
+    if args.signed_test_candidate {
+        configure_test_candidate(&mut plan)?;
+        eprintln!(
+            "SIGNED TEST CANDIDATE: image signature verified; release qualification incomplete. Do not use customer data."
+        );
+    }
     process::inherit(&plan)?;
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(600) {
@@ -497,6 +528,9 @@ fn prepare_configuration(args: &InstallArgs) -> Result<()> {
         "deployment-release.sha256",
         "deployment-trust-store.sha256",
     ] {
+        if args.signed_test_candidate && name != "deployment-release.json" {
+            continue;
+        }
         let source = releases.join(name);
         let metadata = fs::symlink_metadata(&source)?;
         ensure!(
@@ -618,6 +652,36 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn candidate_mode_is_labeled_and_production_plan_stays_strict() {
+        let image = "example.invalid/appliance@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let production = run_plan(image, "/etc/thelve", "/var/lib/thelve").unwrap();
+        assert!(
+            !production
+                .args
+                .iter()
+                .any(|arg| arg.contains("ALLOW_UNSIGNED"))
+        );
+        let mut candidate = production.clone();
+        configure_test_candidate(&mut candidate).unwrap();
+        assert_eq!(candidate.args.last().unwrap(), image);
+        assert!(
+            candidate
+                .args
+                .contains(&format!("io.thelve.installation.verified-image={image}"))
+        );
+        assert!(
+            candidate
+                .args
+                .contains(&"io.thelve.installation.status=signed-test-candidate".to_owned())
+        );
+        assert!(
+            candidate
+                .args
+                .contains(&"THELVE_APPLIANCE_IMAGE_DIGEST=unqualified".to_owned())
+        );
+    }
+
     #[test]
     fn image_signers_are_explicit_and_closed() {
         use clap::{Command, FromArgMatches};
