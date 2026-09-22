@@ -644,6 +644,9 @@ enum SecretCommand {
         /// Read from an owner-only secret file instead of a terminal prompt.
         #[arg(long, conflicts_with = "stdin")]
         file: Option<PathBuf>,
+        /// Read the named environment variable; pass its name, never its value.
+        #[arg(long, conflicts_with_all = ["stdin", "file"])]
+        env: Option<String>,
     },
     /// Generate one correlated version-1 set for all non-Telnyx runtime secrets.
     InitializeInternal {
@@ -848,6 +851,7 @@ pub fn execute(cli: Cli) -> Result<()> {
                 name,
                 stdin,
                 file,
+                env,
             } => {
                 let intent = config::load(&config)?;
                 if !intent
@@ -858,7 +862,9 @@ pub fn execute(cli: Cli) -> Result<()> {
                 {
                     bail!("secret {name:?} is not declared in spec.secretNames");
                 }
-                let value = if let Some(path) = file {
+                let value = if let Some(name) = env {
+                    secrets::read_environment(&name)?
+                } else if let Some(path) = file {
                     secrets::read_private_file(&path)?
                 } else if stdin {
                     secrets::read_stdin().context("read secret from stdin")?
@@ -1082,6 +1088,34 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn secret_sources_are_exclusive_and_raw_key_arguments_are_rejected() {
+        let base = [
+            "thelve",
+            "secret",
+            "set",
+            "--config",
+            "/config.yaml",
+            "--name",
+            "provider-vapi",
+        ];
+        for source in [
+            vec!["--env", "VAPI_API_KEY"],
+            vec!["--file", "/run/secrets/vapi"],
+            vec!["--stdin"],
+        ] {
+            assert!(Cli::try_parse_from(base.into_iter().chain(source)).is_ok());
+        }
+        for invalid in [
+            vec!["--env", "VAPI_API_KEY", "--stdin"],
+            vec!["--env", "VAPI_API_KEY", "--file", "/key"],
+            vec!["--file", "/key", "--stdin"],
+            vec!["--key", "synthetic-secret"],
+        ] {
+            assert!(Cli::try_parse_from(base.into_iter().chain(invalid)).is_err());
+        }
+    }
 
     #[test]
     fn local_launch_does_not_require_cloud_infrastructure_flags() {

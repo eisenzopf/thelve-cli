@@ -46,6 +46,19 @@ pub fn read_hidden(prompt: &str) -> Result<Zeroizing<String>> {
     validate_value(value)
 }
 
+pub fn read_environment(name: &str) -> Result<Zeroizing<String>> {
+    if name.is_empty()
+        || !name.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+    {
+        bail!("secret environment variable name is invalid");
+    }
+    let value = std::env::var(name)
+        .map_err(|_| anyhow::anyhow!("secret environment variable is missing or not UTF-8"))?;
+    validate_value(value)
+}
+
 /// Read a provisioned secret without accepting symlinks or permissive files.
 #[cfg(unix)]
 pub fn read_private_file(path: &Path) -> Result<Zeroizing<String>> {
