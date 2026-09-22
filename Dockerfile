@@ -5,6 +5,7 @@ ENV CARGO_BUILD_JOBS=2
 WORKDIR /source
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY contracts ./contracts
 COPY modules ./modules
 COPY distribution ./distribution
 RUN cargo build --locked --release --bin thelve
