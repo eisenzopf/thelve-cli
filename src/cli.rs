@@ -641,6 +641,9 @@ enum SecretCommand {
         /// Read the secret from stdin instead of a hidden terminal prompt.
         #[arg(long)]
         stdin: bool,
+        /// Read from an owner-only secret file instead of a terminal prompt.
+        #[arg(long, conflicts_with = "stdin")]
+        file: Option<PathBuf>,
     },
     /// Generate one correlated version-1 set for all non-Telnyx runtime secrets.
     InitializeInternal {
@@ -844,6 +847,7 @@ pub fn execute(cli: Cli) -> Result<()> {
                 config,
                 name,
                 stdin,
+                file,
             } => {
                 let intent = config::load(&config)?;
                 if !intent
@@ -854,7 +858,9 @@ pub fn execute(cli: Cli) -> Result<()> {
                 {
                     bail!("secret {name:?} is not declared in spec.secretNames");
                 }
-                let value = if stdin {
+                let value = if let Some(path) = file {
+                    secrets::read_private_file(&path)?
+                } else if stdin {
                     secrets::read_stdin().context("read secret from stdin")?
                 } else {
                     secrets::read_hidden(&format!("Value for {name}: "))?

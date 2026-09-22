@@ -46,6 +46,42 @@ pub fn read_hidden(prompt: &str) -> Result<Zeroizing<String>> {
     validate_value(value)
 }
 
+/// Read a provisioned secret without accepting symlinks or permissive files.
+#[cfg(unix)]
+pub fn read_private_file(path: &Path) -> Result<Zeroizing<String>> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path).context("inspect secret file")?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("secret input must be a regular file, not a symlink");
+    }
+    if metadata.mode() & 0o077 != 0 {
+        bail!("secret file must not be accessible to group or other users");
+    }
+    let file = std::fs::File::open(path).context("open secret file")?;
+    let opened = file.metadata().context("inspect opened secret file")?;
+    if opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.mode() & 0o077 != 0
+        || !opened.is_file()
+    {
+        bail!("secret file changed while opening");
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take((MAX_SECRET_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_SECRET_BYTES {
+        bail!("secret exceeds {MAX_SECRET_BYTES} byte limit");
+    }
+    while bytes
+        .last()
+        .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+    {
+        bytes.pop();
+    }
+    let value = std::str::from_utf8(&bytes).context("secret input must be UTF-8")?;
+    validate_value(value.to_owned())
+}
+
 pub fn read_stdin() -> Result<Zeroizing<String>> {
     let mut bytes = Vec::new();
     io::stdin()
@@ -399,6 +435,26 @@ mod tests {
     use crate::config::{CloudProvider, tests::deployable};
 
     use super::*;
+
+    #[test]
+    fn private_file_input_rejects_exposure_symlinks_and_oversize_values() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("key");
+        std::fs::write(&path, "synthetic-key\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_private_file(&path).unwrap().as_str(), "synthetic-key");
+        let link = directory.path().join("link");
+        symlink(&path, &link).unwrap();
+        assert!(read_private_file(&link).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(read_private_file(&path).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&path, vec![b'x'; MAX_SECRET_BYTES + 1]).unwrap();
+        assert!(read_private_file(&path).is_err());
+        std::fs::write(&path, "\n").unwrap();
+        assert!(read_private_file(&path).is_err());
+    }
 
     #[test]
     fn secret_never_appears_in_process_arguments() {
