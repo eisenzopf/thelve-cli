@@ -367,6 +367,13 @@ fn installation_name(hostname: &str) -> String {
     format!("thelve-{:x}", Sha256::digest(hostname.as_bytes()))[..39].to_owned()
 }
 
+fn installation_domains(hostname: &str) -> serde_json::Value {
+    serde_json::json!({
+        "app": hostname, "api": format!("api.{hostname}"),
+        "media": format!("media.{hostname}"), "sip": format!("sip.{hostname}"),
+    })
+}
+
 fn validate_administrator_email(email: &str) -> Result<()> {
     let (local, domain) = email
         .split_once('@')
@@ -557,10 +564,7 @@ fn prepare_configuration(args: &InstallArgs) -> Result<()> {
     let mut node: serde_json::Value = serde_json::from_str(&template)?;
     // A stable name is used on every retry; no tenant or administrator is seeded here.
     node["metadata"]["name"] = serde_json::json!(installation_name(hostname));
-    node["spec"]["domains"] = serde_json::json!({
-        "app": hostname, "api": format!("api.{hostname}"),
-        "media": format!("media.{hostname}"), "sip": hostname,
-    });
+    node["spec"]["domains"] = installation_domains(hostname);
     node["spec"]["networking"]["advertisedIpv4"] =
         serde_json::json!(args.public_ip.context("public IP required")?.to_string());
     node["spec"]["tls"]["contactEmail"] = serde_json::json!(email);
@@ -652,6 +656,18 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installation_hostnames_are_distinct() {
+        let domains = installation_domains("thelve.rudeless.ai");
+        let unique: std::collections::BTreeSet<_> = domains
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        assert_eq!(unique.len(), 4);
+        assert_eq!(domains["sip"], "sip.thelve.rudeless.ai");
+    }
     #[test]
     fn candidate_mode_is_labeled_and_production_plan_stays_strict() {
         let image = "example.invalid/appliance@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
