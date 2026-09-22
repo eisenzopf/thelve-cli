@@ -283,10 +283,14 @@ pub fn install(args: InstallArgs) -> Result<()> {
                     args.hostname.as_deref().context("hostname required")?,
                     email,
                 )?;
+                println!(
+                    "Thelve appliance is healthy. Sign in at your configured HTTPS hostname and change the temporary password."
+                );
+            } else {
+                println!(
+                    "Thelve appliance is healthy. Run thelve complete-setup --admin-email EMAIL --approve on this host to create the initial administrator."
+                );
             }
-            println!(
-                "Thelve appliance is healthy. Complete administrator setup at your configured HTTPS hostname."
-            );
             return Ok(());
         }
         thread::sleep(Duration::from_secs(5));
