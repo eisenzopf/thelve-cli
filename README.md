@@ -71,6 +71,22 @@ a successful compilation alone does not qualify an image for installation.
 Supply an exact digest-pinned image signed by the Thelve candidate workflow
 and the corresponding signed release directory:
 
+For the separately approved Google Cloud image-signing key, select
+`--image-signer release-key`. Its public key is embedded in the CLI; operators
+cannot substitute an arbitrary key. Signature and transparency-log verification
+remain mandatory. GitHub workflow identity verification remains the default.
+
+Blank-host qualification may explicitly use `--signed-test-candidate` with a
+fresh `--hostname` configuration. This mode skips final release-document
+qualification, not image verification or real Keycloak authentication. It uses
+only `deployment-release.json` from the rendering-input directory and labels
+the container `signed-test-candidate`. A rendering fixture is not release
+evidence and must never be signed or promoted. Do not put customer data in this
+mode. Production installation without this flag keeps its release checks.
+
+The generated names are the requested web hostname and its `api.`, `media.`,
+and `sip.` subdomains; configure DNS for each service you intend to use.
+
 ```sh
 sudo thelve install \
   --image REGISTRY/REPOSITORY/IMAGE@sha256:DIGEST \
