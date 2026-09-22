@@ -409,8 +409,11 @@ fn finish_administrator(
     let bootstrap = crate::secrets::read_private_file(&configuration.join("secrets").join(
         materialized_secret_filename("keycloak-bootstrap-admin-password"),
     ))?;
-    let policy =
-        crate::secrets::read_private_file(&configuration.join("secrets/oidc--client-secret"))?;
+    let policy = crate::secrets::read_private_file(
+        &configuration
+            .join("secrets")
+            .join(materialized_secret_filename("oidc/client-secret")),
+    )?;
     let handoff = configuration.join("initial-admin-password");
     let temporary = prepare_administrator_password(&handoff)?;
     let (result, temporary) = crate::identity::create_administrator_with_password(
