@@ -22,6 +22,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Install a verified single-container appliance on this Linux Docker host.
+    Install(crate::appliance::InstallArgs),
     /// Administer a local appliance.
     #[command(hide = true)]
     Dev(crate::dev::DevArgs),
@@ -651,6 +653,7 @@ enum SecretCommand {
 
 pub fn execute(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Install(args) => crate::appliance::install(args),
         Command::Dev(args) => crate::dev::execute(args),
         Command::Doctor(args) => cloud::doctor(args.provider, args.project, args.region),
         Command::Release(args) => match args.command {
