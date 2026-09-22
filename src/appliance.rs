@@ -176,6 +176,7 @@ pub fn install(args: InstallArgs) -> Result<()> {
         digests.contains(&args.image),
         "pulled image identity differs from the verified digest"
     );
+    initialize_secrets(&configuration.join("secrets"))?;
     fs::create_dir_all(&args.data)?;
     let data = args.data.canonicalize()?;
     let plan = run_plan(
@@ -212,9 +213,70 @@ pub fn install(args: InstallArgs) -> Result<()> {
     )
 }
 
+fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
+    use std::{
+        io::Write,
+        os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    };
+    if directory.exists() {
+        ensure!(
+            !fs::symlink_metadata(directory)?.file_type().is_symlink(),
+            "secret directory must not be a symlink"
+        );
+        // Existing credentials are never regenerated; runtime preflight checks
+        // completeness against the rendered secret references.
+        return Ok(());
+    }
+    let parent = directory
+        .parent()
+        .context("secret directory needs a parent")?;
+    let stage = tempfile::tempdir_in(parent)?;
+    fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o700))?;
+    for (name, value) in crate::secrets::generated_portable_values()? {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(stage.path().join(name.replace('/', "--")))?;
+        file.write_all(value.as_bytes())?;
+        file.sync_all()?;
+    }
+    fs::rename(stage.path(), directory)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn internal_secrets_are_correlated_private_and_preserved_on_retry() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("secrets");
+        initialize_secrets(&directory).unwrap();
+        let password = fs::read_to_string(directory.join("postgres-password")).unwrap();
+        let database = fs::read_to_string(directory.join("database-url")).unwrap();
+        assert!(database.contains(&format!(":{password}@127.0.0.1:5432/")));
+        assert_eq!(
+            fs::read_to_string(directory.join("keycloak-database-password")).unwrap(),
+            password
+        );
+        assert_eq!(
+            fs::metadata(directory.join("database-url"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(!directory.join("telnyx-api-key").exists());
+        assert!(!directory.join("vapi-api-key").exists());
+        initialize_secrets(&directory).unwrap();
+        assert_eq!(
+            fs::read_to_string(directory.join("postgres-password")).unwrap(),
+            password
+        );
+    }
     #[test]
     fn mutable_or_option_like_images_are_refused() {
         for image in [

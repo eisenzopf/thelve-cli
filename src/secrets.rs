@@ -208,6 +208,45 @@ pub(crate) fn generated_internal_values(
     ]))
 }
 
+/// Internal-only credentials for the one-container appliance. Never reads
+/// development environment variables or carries external provider credentials.
+pub(crate) fn generated_portable_values() -> Result<BTreeMap<String, Zeroizing<String>>> {
+    let mut values = generated_internal_values("s3://thelve-backups/appliance")?;
+    let password = values
+        .get("postgres-password")
+        .context("database password missing")?;
+    let url = format!(
+        "postgres://postgres:{}@127.0.0.1:5432/postgres",
+        password.as_str()
+    );
+    for key in [
+        "database-url",
+        "migration-database-url",
+        "realtime-callback-database-url",
+    ] {
+        values.insert(key.into(), Zeroizing::new(url.clone()));
+    }
+    for (target, source) in [
+        ("recording-store-access-key", "minio-root-user"),
+        ("recording-store-secret-key", "minio-root-password"),
+        ("keycloak-database-password", "postgres-password"),
+    ] {
+        let value = values
+            .get(source)
+            .context("correlated credential missing")?
+            .clone();
+        values.insert(target.into(), value);
+    }
+    for key in [
+        "coworker-security-root",
+        "vapi-custom-transcriber-bearer-token",
+        "vapi-custom-transcriber-asr-token",
+    ] {
+        values.insert(key.into(), random_token());
+    }
+    Ok(values)
+}
+
 fn random_token() -> Zeroizing<String> {
     let mut bytes = [0_u8; 32];
     OsRng.fill_bytes(&mut bytes);
