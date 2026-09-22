@@ -17,8 +17,17 @@ pub struct InstallArgs {
     #[arg(long)]
     image: String,
     /// Prepared appliance configuration, signed release documents, and secret files.
-    #[arg(long)]
+    #[arg(long, default_value = "/etc/thelve")]
     configuration: PathBuf,
+    /// Generate fresh configuration using the template in the verified image.
+    #[arg(long, requires_all = ["contact_email", "public_ip", "release_directory"])]
+    hostname: Option<String>,
+    #[arg(long, requires = "hostname")]
+    contact_email: Option<String>,
+    #[arg(long, requires = "hostname")]
+    public_ip: Option<std::net::Ipv4Addr>,
+    #[arg(long, requires = "hostname")]
+    release_directory: Option<PathBuf>,
     /// Durable appliance data. Existing nonempty directories are never adopted implicitly.
     #[arg(long, default_value = "/var/lib/thelve")]
     data: PathBuf,
@@ -92,40 +101,6 @@ pub fn install(args: InstallArgs) -> Result<()> {
         process::capture(&CommandPlan::new("id").arg("-u"))?.trim() == "0",
         "run the installer as root"
     );
-    let configuration = args
-        .configuration
-        .canonicalize()
-        .context("configuration directory unavailable")?;
-    for file in [
-        "appliance.env",
-        "Caddyfile",
-        "release/portable-appliance-release.json",
-        "release/portable-appliance-release.signature.json",
-    ] {
-        let metadata = fs::symlink_metadata(configuration.join(file))
-            .with_context(|| format!("configuration lacks {file}"))?;
-        ensure!(
-            metadata.is_file() && !metadata.file_type().is_symlink(),
-            "configuration {file} must be a regular file"
-        );
-    }
-    let environment = fs::read_to_string(configuration.join("appliance.env"))?;
-    for line in environment.lines().filter(|line| !line.starts_with('#')) {
-        let key = line.split('=').next().unwrap_or_default();
-        ensure!(
-            !matches!(
-                key,
-                "THELVE_APPLIANCE_ALLOW_UNSIGNED_DEVELOPMENT"
-                    | "THELVE_ALLOW_UNVERIFIED_PRODUCT_RELEASE"
-                    | "GOOGLE_APPLICATION_CREDENTIALS"
-            ),
-            "release installation refuses unsafe environment setting {key}"
-        );
-        ensure!(
-            line != "AUTO_SEED_DEMO=true" && line != "ALLOW_DEMO_AUTH=true",
-            "release installation refuses demo data and demo authentication"
-        );
-    }
     let context = process::capture(&CommandPlan::new("docker").args([
         "context",
         "inspect",
@@ -176,6 +151,43 @@ pub fn install(args: InstallArgs) -> Result<()> {
         digests.contains(&args.image),
         "pulled image identity differs from the verified digest"
     );
+    if args.hostname.is_some() {
+        prepare_configuration(&args)?;
+    }
+    let configuration = args
+        .configuration
+        .canonicalize()
+        .context("configuration directory unavailable")?;
+    for file in [
+        "appliance.env",
+        "Caddyfile",
+        "release/portable-appliance-release.json",
+        "release/portable-appliance-release.signature.json",
+    ] {
+        let metadata = fs::symlink_metadata(configuration.join(file))
+            .with_context(|| format!("configuration lacks {file}"))?;
+        ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "configuration {file} must be a regular file"
+        );
+    }
+    let environment = fs::read_to_string(configuration.join("appliance.env"))?;
+    for line in environment.lines().filter(|line| !line.starts_with('#')) {
+        let key = line.split('=').next().unwrap_or_default();
+        ensure!(
+            !matches!(
+                key,
+                "THELVE_APPLIANCE_ALLOW_UNSIGNED_DEVELOPMENT"
+                    | "THELVE_ALLOW_UNVERIFIED_PRODUCT_RELEASE"
+                    | "GOOGLE_APPLICATION_CREDENTIALS"
+            ),
+            "release installation refuses unsafe environment setting {key}"
+        );
+        ensure!(
+            line != "AUTO_SEED_DEMO=true" && line != "ALLOW_DEMO_AUTH=true",
+            "release installation refuses demo data and demo authentication"
+        );
+    }
     initialize_secrets(&configuration.join("secrets"))?;
     fs::create_dir_all(&args.data)?;
     let data = args.data.canonicalize()?;
@@ -213,6 +225,154 @@ pub fn install(args: InstallArgs) -> Result<()> {
     )
 }
 
+fn installation_name(hostname: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    format!("thelve-{:x}", Sha256::digest(hostname.as_bytes()))[..39].to_owned()
+}
+
+fn prepare_configuration(args: &InstallArgs) -> Result<()> {
+    use sha2::{Digest as _, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+    ensure!(
+        !args.configuration.exists(),
+        "configuration already exists; refusing to overwrite it"
+    );
+    let hostname = args.hostname.as_deref().context("hostname required")?;
+    let email = args
+        .contact_email
+        .as_deref()
+        .context("contact email required")?;
+    ensure!(
+        hostname.len() <= 200
+            && hostname.contains('.')
+            && hostname.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && !label.starts_with('-')
+                    && !label.ends_with('-')
+                    && label
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            }),
+        "hostname must be a lowercase fully qualified DNS name"
+    );
+    ensure!(
+        email.contains('@') && !email.chars().any(char::is_whitespace),
+        "valid contact email required"
+    );
+    let releases = args
+        .release_directory
+        .as_ref()
+        .context("release directory required")?
+        .canonicalize()?;
+    let parent = args
+        .configuration
+        .parent()
+        .context("configuration parent required")?;
+    fs::create_dir_all(parent)?;
+    let stage = tempfile::tempdir_in(parent)?;
+    fs::set_permissions(stage.path(), fs::Permissions::from_mode(0o700))?;
+    let release_stage = stage.path().join("release");
+    fs::create_dir(&release_stage)?;
+    for name in [
+        "product-release.json",
+        "product-release.signature.json",
+        "portable-appliance-release.json",
+        "portable-appliance-release.signature.json",
+        "catalog-trust-root.json",
+        "catalog-trust-root.sha256",
+        "deployment-release.json",
+        "deployment-release.signature.json",
+        "deployment-trust-store.json",
+        "deployment-release.sha256",
+        "deployment-trust-store.sha256",
+    ] {
+        let source = releases.join(name);
+        let metadata = fs::symlink_metadata(&source)?;
+        ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "release input {name} must be a regular file"
+        );
+        fs::copy(source, release_stage.join(name))?;
+    }
+    let template = process::capture(&CommandPlan::new("docker").args([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--entrypoint",
+        "cat",
+        &args.image,
+        "/etc/thelve-image/node.template.json",
+    ]))?;
+    let mut node: serde_json::Value = serde_json::from_str(&template)?;
+    // A stable name is used on every retry; no tenant or administrator is seeded here.
+    node["metadata"]["name"] = serde_json::json!(installation_name(hostname));
+    node["spec"]["domains"] = serde_json::json!({
+        "app": hostname, "api": format!("api.{hostname}"),
+        "media": format!("media.{hostname}"), "sip": hostname,
+    });
+    node["spec"]["networking"]["advertisedIpv4"] =
+        serde_json::json!(args.public_ip.context("public IP required")?.to_string());
+    node["spec"]["tls"]["contactEmail"] = serde_json::json!(email);
+    node["spec"]["releaseRef"] = serde_json::json!(format!(
+        "sha256:{:x}",
+        Sha256::digest(fs::read(release_stage.join("deployment-release.json"))?)
+    ));
+    fs::write(
+        stage.path().join("node.json"),
+        serde_json::to_vec_pretty(&node)?,
+    )?;
+    let mount = format!("type=bind,src={},dst=/work", stage.path().display());
+    ensure!(
+        !stage.path().to_string_lossy().contains(','),
+        "configuration path cannot contain commas"
+    );
+    process::inherit(&CommandPlan::new("docker").args([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--mount",
+        &mount,
+        "--entrypoint",
+        "render_portable_appliance",
+        &args.image,
+        "/work/node.json",
+        "/work/release/deployment-release.json",
+        &args.image,
+        "/work/rendered",
+    ]))?;
+    for name in [
+        "appliance.env",
+        "Caddyfile",
+        "keycloak-realm.json",
+        "appliance-plan.json",
+    ] {
+        fs::rename(
+            stage.path().join("rendered").join(name),
+            stage.path().join(name),
+        )?;
+    }
+    fs::remove_dir(stage.path().join("rendered"))?;
+    initialize_secrets(&stage.path().join("secrets"))?;
+    fs::rename(stage.path(), &args.configuration)?;
+    println!(
+        "Configuration generated. DNS must point {hostname}, api.{hostname}, and media.{hostname} to the server."
+    );
+    Ok(())
+}
+
 fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
     use std::{
         io::Write,
@@ -248,6 +408,14 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn installation_names_are_stable_and_bounded_for_long_hostnames() {
+        let hostname = format!("{}.{}.example.com", "a".repeat(63), "b".repeat(63));
+        let name = installation_name(&hostname);
+        assert!(name.len() <= 50);
+        assert_eq!(name, installation_name(&hostname));
+        assert_ne!(name, installation_name("another.example.com"));
+    }
     #[test]
     fn internal_secrets_are_correlated_private_and_preserved_on_retry() {
         use std::os::unix::fs::PermissionsExt;
