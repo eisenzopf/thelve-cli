@@ -1,6 +1,7 @@
 mod activation;
 mod agent;
 mod appliance;
+mod appliance_upgrade;
 mod catalog;
 mod cli;
 mod cloud;

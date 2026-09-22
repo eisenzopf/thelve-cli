@@ -24,6 +24,8 @@ pub struct Cli {
 enum Command {
     /// Install a verified single-container appliance on this Linux Docker host.
     Install(crate::appliance::InstallArgs),
+    /// Upgrade a signed test appliance, preserving data and a stopped-container backup.
+    Upgrade(crate::appliance_upgrade::UpgradeArgs),
     /// Complete first-administrator setup on an already installed appliance.
     CompleteSetup(crate::appliance::CompleteSetupArgs),
     /// Configure appliance provider keys using a hidden prompt, file, or environment.
@@ -664,6 +666,7 @@ enum SecretCommand {
 pub fn execute(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Install(args) => crate::appliance::install(args),
+        Command::Upgrade(args) => crate::appliance_upgrade::upgrade(args),
         Command::CompleteSetup(args) => crate::appliance::complete_setup(args),
         Command::Provider(args) => crate::provider::run(args),
         Command::Dev(args) => crate::dev::execute(args),

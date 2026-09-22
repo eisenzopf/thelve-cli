@@ -84,6 +84,23 @@ the container `signed-test-candidate`. A rendering fixture is not release
 evidence and must never be signed or promoted. Do not put customer data in this
 mode. Production installation without this flag keeps its release checks.
 
+An existing signed **test** appliance can be updated without reinstalling it:
+
+```sh
+sudo thelve upgrade --image REGISTRY/IMAGE@sha256:DIGEST \
+  --image-signer release-key --signed-test-candidate --approve
+```
+
+Upgrade verifies the signature and architecture before stopping the old container.
+It snapshots configuration and the stopped PostgreSQL data into a private directory
+under `/var/backups/thelve`, retains the old container, and preserves credentials,
+licensing configuration, hostnames and administrator login. It adds the portable
+protected-runtime object-store default when absent. A failed startup does not
+automatically roll back a potentially migrated database; the error names the
+snapshot and prior container for recovery. This command does not qualify or upgrade
+a production release. A stale `/run/thelve-upgrade.lock` requires confirming that
+no upgrade is running before removing that lock directory.
+
 The generated names are the requested web hostname and its `api.`, `media.`,
 and `sip.` subdomains; configure DNS for each service you intend to use.
 

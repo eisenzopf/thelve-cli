@@ -13,12 +13,12 @@ const SIGNING_IDENTITY: &str = "https://github.com/eisenzopf/Thelve/.github/work
 const RELEASE_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEd3EBPcmusyL/6aY9u3/exrRbseOk\nftW59WagO5goZxLxobYSGSz5EtYCB+ePvtsGDnErbwidonJ8hmEbYqZFBQ==\n-----END PUBLIC KEY-----\n";
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
-enum ImageSigner {
+pub(crate) enum ImageSigner {
     Github,
     ReleaseKey,
 }
 
-fn verify_image(image: &str, signer: ImageSigner) -> Result<()> {
+pub(crate) fn verify_image(image: &str, signer: ImageSigner) -> Result<()> {
     use std::io::Write;
     let mut key = tempfile::NamedTempFile::new()?;
     let plan = match signer {
@@ -137,7 +137,7 @@ pub struct InstallArgs {
     approve: bool,
 }
 
-fn validate_image(image: &str) -> Result<&str> {
+pub(crate) fn validate_image(image: &str) -> Result<&str> {
     let (repository, digest) = image
         .rsplit_once("@sha256:")
         .context("image must be pinned by sha256 digest")?;
@@ -157,7 +157,7 @@ fn validate_image(image: &str) -> Result<&str> {
     Ok(digest)
 }
 
-fn run_plan(image: &str, configuration: &str, data: &str) -> Result<CommandPlan> {
+pub(crate) fn run_plan(image: &str, configuration: &str, data: &str) -> Result<CommandPlan> {
     let digest = validate_image(image)?;
     ensure!(
         !configuration.contains(',') && !data.contains(','),
@@ -189,7 +189,7 @@ fn run_plan(image: &str, configuration: &str, data: &str) -> Result<CommandPlan>
     ]))
 }
 
-fn configure_test_candidate(plan: &mut CommandPlan) -> Result<()> {
+pub(crate) fn configure_test_candidate(plan: &mut CommandPlan) -> Result<()> {
     let image = plan.args.pop().context("container image missing")?;
     validate_image(&image)?;
     // The legacy in-image development switch skips release-document admission,
