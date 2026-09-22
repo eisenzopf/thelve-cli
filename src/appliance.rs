@@ -203,6 +203,8 @@ fn configure_test_candidate(plan: &mut CommandPlan) -> Result<()> {
         "--env".into(),
         "THELVE_APPLIANCE_ALLOW_UNSIGNED_DEVELOPMENT=true".into(),
         "--env".into(),
+        "THELVE_SIGNED_TEST_CANDIDATE=true".into(),
+        "--env".into(),
         "THELVE_APPLIANCE_IMAGE_DIGEST=unqualified".into(),
         image,
     ]);
@@ -298,6 +300,7 @@ pub fn install(args: InstallArgs) -> Result<()> {
             !matches!(
                 key,
                 "THELVE_APPLIANCE_ALLOW_UNSIGNED_DEVELOPMENT"
+                    | "THELVE_SIGNED_TEST_CANDIDATE"
                     | "THELVE_ALLOW_UNVERIFIED_PRODUCT_RELEASE"
                     | "GOOGLE_APPLICATION_CREDENTIALS"
             ),
