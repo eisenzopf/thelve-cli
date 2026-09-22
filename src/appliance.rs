@@ -406,9 +406,9 @@ fn finish_administrator(
         .timeout(Duration::from_secs(45))
         .build()?;
     let base = format!("https://{hostname}/sso");
-    let bootstrap = crate::secrets::read_private_file(
-        &configuration.join("secrets/keycloak-bootstrap-admin-password"),
-    )?;
+    let bootstrap = crate::secrets::read_private_file(&configuration.join("secrets").join(
+        materialized_secret_filename("keycloak-bootstrap-admin-password"),
+    ))?;
     let policy =
         crate::secrets::read_private_file(&configuration.join("secrets/oidc--client-secret"))?;
     let handoff = configuration.join("initial-admin-password");
@@ -634,6 +634,12 @@ fn prepare_configuration(args: &InstallArgs) -> Result<()> {
     Ok(())
 }
 
+fn materialized_secret_filename(id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(id.as_bytes()));
+    format!("{}-{}", id.replace('/', "--"), &digest[..12])
+}
+
 fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
     use std::{
         io::Write,
@@ -658,7 +664,7 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(stage.path().join(name.replace('/', "--")))?;
+            .open(stage.path().join(materialized_secret_filename(&name)))?;
         file.write_all(value.as_bytes())?;
         file.sync_all()?;
     }
@@ -669,6 +675,16 @@ fn initialize_secrets(directory: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn secret_filenames_match_appliance_materialization_contract() {
+        assert_eq!(
+            materialized_secret_filename("control-api-service-token"),
+            "control-api-service-token-64b36c6520df"
+        );
+        assert!(
+            materialized_secret_filename("backup/destination").starts_with("backup--destination-")
+        );
+    }
     #[test]
     fn installation_hostnames_are_distinct() {
         let domains = installation_domains("thelve.rudeless.ai");
@@ -786,15 +802,22 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("secrets");
         initialize_secrets(&directory).unwrap();
-        let password = fs::read_to_string(directory.join("postgres-password")).unwrap();
-        let database = fs::read_to_string(directory.join("database-url")).unwrap();
+        let password =
+            fs::read_to_string(directory.join(materialized_secret_filename("postgres-password")))
+                .unwrap();
+        let database =
+            fs::read_to_string(directory.join(materialized_secret_filename("database-url")))
+                .unwrap();
         assert!(database.contains(&format!(":{password}@127.0.0.1:5432/")));
         assert_eq!(
-            fs::read_to_string(directory.join("keycloak-database-password")).unwrap(),
+            fs::read_to_string(
+                directory.join(materialized_secret_filename("keycloak-database-password"))
+            )
+            .unwrap(),
             password
         );
         assert_eq!(
-            fs::metadata(directory.join("database-url"))
+            fs::metadata(directory.join(materialized_secret_filename("database-url")))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -805,7 +828,8 @@ mod tests {
         assert!(!directory.join("vapi-api-key").exists());
         initialize_secrets(&directory).unwrap();
         assert_eq!(
-            fs::read_to_string(directory.join("postgres-password")).unwrap(),
+            fs::read_to_string(directory.join(materialized_secret_filename("postgres-password")))
+                .unwrap(),
             password
         );
     }
