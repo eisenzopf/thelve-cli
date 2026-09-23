@@ -513,6 +513,39 @@ fn variables(intent: &CloudDeployment, state: HostState) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn embedded_network_modules_allow_carrier_restricted_sip_tls() {
+        let gcp = super::GCP_MODULE
+            .get_file("main.tf")
+            .unwrap()
+            .contents_utf8()
+            .unwrap();
+        let sip = gcp
+            .split("resource \"google_compute_firewall\" \"telnyx_sip\"")
+            .nth(1)
+            .unwrap()
+            .split("resource \"")
+            .next()
+            .unwrap();
+        assert!(sip.contains("source_ranges = var.telnyx_signaling_cidrs"));
+        assert!(sip.contains("protocol = \"tcp\""));
+        assert!(sip.contains("tostring(var.sip_port)"));
+        let aws = super::AWS_MODULE
+            .get_file("main.tf")
+            .unwrap()
+            .contents_utf8()
+            .unwrap();
+        let sip = aws
+            .split("resource \"aws_vpc_security_group_ingress_rule\" \"telnyx_sip_tls\"")
+            .nth(1)
+            .unwrap()
+            .split("resource \"")
+            .next()
+            .unwrap();
+        assert!(sip.contains("toset(var.telnyx_signaling_cidrs)"));
+        assert!(sip.contains("ip_protocol       = \"tcp\""));
+        assert!(sip.contains("from_port         = var.sip_port"));
+    }
     use crate::config::{CloudProvider, tests::deployable};
 
     use super::*;
