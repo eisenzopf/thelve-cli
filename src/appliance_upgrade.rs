@@ -125,6 +125,10 @@ fn candidate_environment(container: &Value) -> Result<Vec<u8>> {
             .map(|(_, value)| value)
             .next_back()
     };
+    let enable_native_talk = value("THELVE_APPLIANCE_MODE") == Some("portable_oci")
+        && value("VOICE_RUNTIME_PROFILE") == Some("tenant-cloud")
+        && value("CONTROL_API_SERVICE_TOKEN_FILE").is_some_and(|path| !path.is_empty())
+        && value("BROWSER_VOICE_BRIDGE_ENABLED").is_none();
     // Bring an existing portable installation in line with the current render
     // defaults. Both consumers retain separate protected object namespaces.
     if value("THELVE_APPLIANCE_MODE") == Some("portable_oci")
@@ -135,6 +139,12 @@ fn candidate_environment(container: &Value) -> Result<Vec<u8>> {
             .context("portable appliance object store is missing")?;
         let addition = format!("GOVERNED_RUNTIME_OBJECT_STORE_URL={destination}\n");
         bytes.extend_from_slice(addition.as_bytes());
+    }
+    if enable_native_talk {
+        // Native Vapi uses the existing authenticated gateway and provider
+        // credential. It requires no custom-transcriber credential or ASR.
+        // An explicitly configured bridge setting is never overwritten.
+        bytes.extend_from_slice(b"BROWSER_VOICE_BRIDGE_ENABLED=true\n");
     }
     Ok(bytes)
 }
@@ -388,6 +398,29 @@ mod tests {
             candidate_environment(&input).unwrap(),
             environment_bytes(&input).unwrap()
         );
+    }
+
+    #[test]
+    fn upgrade_enables_native_talk_only_for_configured_portable_gateway() {
+        let mut input = container();
+        input["Config"]["Env"] = json!([
+            "THELVE_APPLIANCE_MODE=portable_oci",
+            "ATTACHMENT_OBJECT_STORE_URL=s3://local-objects",
+            "VOICE_RUNTIME_PROFILE=tenant-cloud",
+            "CONTROL_API_SERVICE_TOKEN_FILE=/private/service-token"
+        ]);
+        let rendered = candidate_environment(&input).unwrap();
+        let text = std::str::from_utf8(&rendered).unwrap();
+        assert!(text.contains("BROWSER_VOICE_BRIDGE_ENABLED=true\n"));
+        assert!(!text.contains("VAPI_CUSTOM_TRANSCRIBER"));
+        input["Config"]["Env"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("BROWSER_VOICE_BRIDGE_ENABLED=false"));
+        let rendered = candidate_environment(&input).unwrap();
+        let text = std::str::from_utf8(&rendered).unwrap();
+        assert!(text.contains("BROWSER_VOICE_BRIDGE_ENABLED=false\n"));
+        assert!(!text.contains("BROWSER_VOICE_BRIDGE_ENABLED=true\n"));
     }
 
     #[cfg(unix)]
