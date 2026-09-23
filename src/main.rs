@@ -1,5 +1,7 @@
 mod activation;
 mod agent;
+mod appliance;
+mod appliance_upgrade;
 mod catalog;
 mod cli;
 mod cloud;
@@ -13,6 +15,7 @@ mod local;
 mod mcp;
 mod preview;
 mod process;
+mod provider;
 mod recovery;
 mod secrets;
 mod skills;

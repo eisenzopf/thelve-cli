@@ -61,6 +61,80 @@ qualification. The intended familiar installation command is
 until that formula is accepted operators install the exact verified GitHub
 Release asset documented with the release.
 
+## Linux container installation (release testing)
+
+`thelve install` runs on the Linux appliance host as root and downloads an
+existing image; it does not compile application code. Docker Engine and
+`cosign` must already be installed. This path is under release qualification;
+a successful compilation alone does not qualify an image for installation.
+
+Supply an exact digest-pinned image signed by the Thelve candidate workflow
+and the corresponding signed release directory:
+
+For the separately approved Google Cloud image-signing key, select
+`--image-signer release-key`. Its public key is embedded in the CLI; operators
+cannot substitute an arbitrary key. Signature and transparency-log verification
+remain mandatory. GitHub workflow identity verification remains the default.
+
+Blank-host qualification may explicitly use `--signed-test-candidate` with a
+fresh `--hostname` configuration. This mode skips final release-document
+qualification, not image verification or real Keycloak authentication. It uses
+only `deployment-release.json` from the rendering-input directory and labels
+the container `signed-test-candidate`. A rendering fixture is not release
+evidence and must never be signed or promoted. Do not put customer data in this
+mode. Production installation without this flag keeps its release checks.
+
+An existing signed **test** appliance can be updated without reinstalling it:
+
+```sh
+sudo thelve upgrade --image REGISTRY/IMAGE@sha256:DIGEST \
+  --image-signer release-key --signed-test-candidate --approve
+```
+
+Upgrade verifies the signature and architecture before stopping the old container.
+It snapshots configuration and the stopped PostgreSQL data into a private directory
+under `/var/backups/thelve`, retains the old container, and preserves credentials,
+licensing configuration, hostnames and administrator login. It adds the portable
+protected-runtime object-store default when absent. A failed startup does not
+automatically roll back a potentially migrated database; the error names the
+snapshot and prior container for recovery. This command does not qualify or upgrade
+a production release. A stale `/run/thelve-upgrade.lock` requires confirming that
+no upgrade is running before removing that lock directory.
+
+The generated names are the requested web hostname and its `api.`, `media.`,
+and `sip.` subdomains; configure DNS for each service you intend to use.
+
+```sh
+sudo thelve install \
+  --image REGISTRY/REPOSITORY/IMAGE@sha256:DIGEST \
+  --hostname thelve.example.com \
+  --public-ip 203.0.113.10 \
+  --contact-email operator@example.com \
+  --admin-email admin@example.com \
+  --release-directory /path/to/verified-release \
+  --approve
+```
+
+Replace the example values with the published release identity and your host's
+settings. Configure DNS for the hostname and its `api.` and `media.` subdomains
+before installation. Existing nonempty configuration or data is refused, not
+overwritten. Fresh configuration contains no Telnyx or Vapi credentials.
+
+The administrator email is separate from the licensing contact. The CLI
+generates a temporary password, shows it only in an interactive terminal, and
+saves an owner-only recovery copy at `/etc/thelve/initial-admin-password`.
+Keycloak requires a password change at first login. Do not capture an
+interactive installation in a terminal recording. After changing the password,
+remove the obsolete recovery copy. An interrupted administrator setup can be
+resumed without reinstalling the appliance:
+
+```sh
+sudo thelve complete-setup --admin-email admin@example.com --approve
+```
+
+This command does not reset an existing administrator's password. Keep the
+same administrator email when resuming setup.
+
 ## Developer verification
 
 ```sh

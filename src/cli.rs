@@ -22,6 +22,14 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Install a verified single-container appliance on this Linux Docker host.
+    Install(crate::appliance::InstallArgs),
+    /// Upgrade a signed test appliance, preserving data and a stopped-container backup.
+    Upgrade(crate::appliance_upgrade::UpgradeArgs),
+    /// Complete first-administrator setup on an already installed appliance.
+    CompleteSetup(crate::appliance::CompleteSetupArgs),
+    /// Configure appliance provider keys using a hidden prompt, file, or environment.
+    Provider(crate::provider::ProviderArgs),
     /// Administer a local appliance.
     #[command(hide = true)]
     Dev(crate::dev::DevArgs),
@@ -639,6 +647,12 @@ enum SecretCommand {
         /// Read the secret from stdin instead of a hidden terminal prompt.
         #[arg(long)]
         stdin: bool,
+        /// Read from an owner-only secret file instead of a terminal prompt.
+        #[arg(long, conflicts_with = "stdin")]
+        file: Option<PathBuf>,
+        /// Read the named environment variable; pass its name, never its value.
+        #[arg(long, conflicts_with_all = ["stdin", "file"])]
+        env: Option<String>,
     },
     /// Generate one correlated version-1 set for all non-Telnyx runtime secrets.
     InitializeInternal {
@@ -651,6 +665,10 @@ enum SecretCommand {
 
 pub fn execute(cli: Cli) -> Result<()> {
     match cli.command {
+        Command::Install(args) => crate::appliance::install(args),
+        Command::Upgrade(args) => crate::appliance_upgrade::upgrade(args),
+        Command::CompleteSetup(args) => crate::appliance::complete_setup(args),
+        Command::Provider(args) => crate::provider::run(args),
         Command::Dev(args) => crate::dev::execute(args),
         Command::Doctor(args) => cloud::doctor(args.provider, args.project, args.region),
         Command::Release(args) => match args.command {
@@ -841,6 +859,8 @@ pub fn execute(cli: Cli) -> Result<()> {
                 config,
                 name,
                 stdin,
+                file,
+                env,
             } => {
                 let intent = config::load(&config)?;
                 if !intent
@@ -851,7 +871,11 @@ pub fn execute(cli: Cli) -> Result<()> {
                 {
                     bail!("secret {name:?} is not declared in spec.secretNames");
                 }
-                let value = if stdin {
+                let value = if let Some(name) = env {
+                    secrets::read_environment(&name)?
+                } else if let Some(path) = file {
+                    secrets::read_private_file(&path)?
+                } else if stdin {
                     secrets::read_stdin().context("read secret from stdin")?
                 } else {
                     secrets::read_hidden(&format!("Value for {name}: "))?
@@ -1073,6 +1097,34 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+
+    #[test]
+    fn secret_sources_are_exclusive_and_raw_key_arguments_are_rejected() {
+        let base = [
+            "thelve",
+            "secret",
+            "set",
+            "--config",
+            "/config.yaml",
+            "--name",
+            "provider-vapi",
+        ];
+        for source in [
+            vec!["--env", "VAPI_API_KEY"],
+            vec!["--file", "/run/secrets/vapi"],
+            vec!["--stdin"],
+        ] {
+            assert!(Cli::try_parse_from(base.into_iter().chain(source)).is_ok());
+        }
+        for invalid in [
+            vec!["--env", "VAPI_API_KEY", "--stdin"],
+            vec!["--env", "VAPI_API_KEY", "--file", "/key"],
+            vec!["--file", "/key", "--stdin"],
+            vec!["--key", "synthetic-secret"],
+        ] {
+            assert!(Cli::try_parse_from(base.into_iter().chain(invalid)).is_err());
+        }
+    }
 
     #[test]
     fn local_launch_does_not_require_cloud_infrastructure_flags() {

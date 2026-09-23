@@ -61,7 +61,7 @@ fn client() -> Result<reqwest::blocking::Client> {
         .context("build sign-in client")
 }
 
-fn temporary_password() -> Zeroizing<String> {
+pub(crate) fn temporary_password() -> Zeroizing<String> {
     let mut bytes = [0_u8; 18];
     OsRng.fill_bytes(&mut bytes);
     let value = URL_SAFE_NO_PAD.encode(bytes);
@@ -151,6 +151,24 @@ pub(crate) fn create_administrator(
     password: Zeroizing<String>,
     policy_secret: &str,
 ) -> Result<(FirstAdministrator, Zeroizing<String>)> {
+    create_administrator_with_password(
+        http,
+        base,
+        email,
+        password,
+        policy_secret,
+        temporary_password(),
+    )
+}
+
+pub(crate) fn create_administrator_with_password(
+    http: &reqwest::blocking::Client,
+    base: &str,
+    email: &str,
+    password: Zeroizing<String>,
+    policy_secret: &str,
+    temporary: Zeroizing<String>,
+) -> Result<(FirstAdministrator, Zeroizing<String>)> {
     let token: TokenResponse = http
         .post(format!(
             "{base}/realms/master/protocol/openid-connect/token"
@@ -178,7 +196,6 @@ pub(crate) fn create_administrator(
         .context("configure Thelve sign-in presentation")?
         .error_for_status()
         .context("the sign-in service refused Thelve presentation settings")?;
-    let temporary = temporary_password();
     let response = http
         .post(format!("{base}/admin/realms/{REALM}/users"))
         .bearer_auth(&token.access_token)
