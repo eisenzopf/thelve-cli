@@ -85,6 +85,16 @@ resource "aws_vpc_security_group_ingress_rule" "telnyx_sip" {
   cidr_ipv4         = each.value
 }
 
+resource "aws_vpc_security_group_ingress_rule" "telnyx_sip_tls" {
+  for_each          = toset(var.telnyx_signaling_cidrs)
+  security_group_id = aws_security_group.thelve.id
+  description       = "Telnyx encrypted SIP signaling"
+  ip_protocol       = "tcp"
+  from_port         = var.sip_port
+  to_port           = var.sip_port
+  cidr_ipv4         = each.value
+}
+
 resource "aws_vpc_security_group_ingress_rule" "telnyx_rtp" {
   for_each          = toset(var.telnyx_media_cidrs)
   security_group_id = aws_security_group.thelve.id

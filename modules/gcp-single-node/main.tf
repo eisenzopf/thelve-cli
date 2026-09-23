@@ -95,6 +95,10 @@ resource "google_compute_firewall" "telnyx_sip" {
     protocol = "udp"
     ports    = [tostring(var.sip_port)]
   }
+  allow {
+    protocol = "tcp"
+    ports    = [tostring(var.sip_port)]
+  }
 }
 
 resource "google_compute_firewall" "telnyx_rtp" {
