@@ -46,6 +46,56 @@ pub fn read_hidden(prompt: &str) -> Result<Zeroizing<String>> {
     validate_value(value)
 }
 
+pub fn read_environment(name: &str) -> Result<Zeroizing<String>> {
+    if name.is_empty()
+        || !name.bytes().enumerate().all(|(index, byte)| {
+            byte == b'_' || byte.is_ascii_alphabetic() || (index > 0 && byte.is_ascii_digit())
+        })
+    {
+        bail!("secret environment variable name is invalid");
+    }
+    process::exclude_secret_environment(name)?;
+    let value = std::env::var(name)
+        .map_err(|_| anyhow::anyhow!("secret environment variable is missing or not UTF-8"))?;
+    validate_value(value)
+}
+
+/// Read a provisioned secret without accepting symlinks or permissive files.
+#[cfg(unix)]
+pub fn read_private_file(path: &Path) -> Result<Zeroizing<String>> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path).context("inspect secret file")?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        bail!("secret input must be a regular file, not a symlink");
+    }
+    if metadata.mode() & 0o077 != 0 {
+        bail!("secret file must not be accessible to group or other users");
+    }
+    let file = std::fs::File::open(path).context("open secret file")?;
+    let opened = file.metadata().context("inspect opened secret file")?;
+    if opened.dev() != metadata.dev()
+        || opened.ino() != metadata.ino()
+        || opened.mode() & 0o077 != 0
+        || !opened.is_file()
+    {
+        bail!("secret file changed while opening");
+    }
+    let mut bytes = Zeroizing::new(Vec::new());
+    file.take((MAX_SECRET_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_SECRET_BYTES {
+        bail!("secret exceeds {MAX_SECRET_BYTES} byte limit");
+    }
+    while bytes
+        .last()
+        .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+    {
+        bytes.pop();
+    }
+    let value = std::str::from_utf8(&bytes).context("secret input must be UTF-8")?;
+    validate_value(value.to_owned())
+}
+
 pub fn read_stdin() -> Result<Zeroizing<String>> {
     let mut bytes = Vec::new();
     io::stdin()
@@ -208,6 +258,45 @@ pub(crate) fn generated_internal_values(
     ]))
 }
 
+/// Internal-only credentials for the one-container appliance. Never reads
+/// development environment variables or carries external provider credentials.
+pub(crate) fn generated_portable_values() -> Result<BTreeMap<String, Zeroizing<String>>> {
+    let mut values = generated_internal_values("s3://thelve-backups/appliance")?;
+    let password = values
+        .get("postgres-password")
+        .context("database password missing")?;
+    let url = format!(
+        "postgres://postgres:{}@127.0.0.1:5432/postgres",
+        password.as_str()
+    );
+    for key in [
+        "database-url",
+        "migration-database-url",
+        "realtime-callback-database-url",
+    ] {
+        values.insert(key.into(), Zeroizing::new(url.clone()));
+    }
+    for (target, source) in [
+        ("recording-store-access-key", "minio-root-user"),
+        ("recording-store-secret-key", "minio-root-password"),
+        ("keycloak-database-password", "postgres-password"),
+    ] {
+        let value = values
+            .get(source)
+            .context("correlated credential missing")?
+            .clone();
+        values.insert(target.into(), value);
+    }
+    for key in [
+        "coworker-security-root",
+        "vapi-custom-transcriber-bearer-token",
+        "vapi-custom-transcriber-asr-token",
+    ] {
+        values.insert(key.into(), random_token());
+    }
+    Ok(values)
+}
+
 fn random_token() -> Zeroizing<String> {
     let mut bytes = [0_u8; 32];
     OsRng.fill_bytes(&mut bytes);
@@ -360,6 +449,26 @@ mod tests {
     use crate::config::{CloudProvider, tests::deployable};
 
     use super::*;
+
+    #[test]
+    fn private_file_input_rejects_exposure_symlinks_and_oversize_values() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("key");
+        std::fs::write(&path, "synthetic-key\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(read_private_file(&path).unwrap().as_str(), "synthetic-key");
+        let link = directory.path().join("link");
+        symlink(&path, &link).unwrap();
+        assert!(read_private_file(&link).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(read_private_file(&path).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&path, vec![b'x'; MAX_SECRET_BYTES + 1]).unwrap();
+        assert!(read_private_file(&path).is_err());
+        std::fs::write(&path, "\n").unwrap();
+        assert!(read_private_file(&path).is_err());
+    }
 
     #[test]
     fn secret_never_appears_in_process_arguments() {

@@ -5,6 +5,30 @@ use anyhow::{Context, Result, bail};
 
 const MAX_CAPTURED_ERROR_BYTES: usize = 4_096;
 
+static SECRET_ENVIRONMENT_NAMES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub fn exclude_secret_environment(name: &str) -> Result<()> {
+    let mut names = SECRET_ENVIRONMENT_NAMES
+        .lock()
+        .map_err(|_| anyhow::anyhow!("secret environment isolation unavailable"))?;
+    if !names.iter().any(|existing| existing == name) {
+        names.push(name.to_owned());
+    }
+    Ok(())
+}
+
+fn command(plan: &CommandPlan) -> Result<Command> {
+    let names = SECRET_ENVIRONMENT_NAMES
+        .lock()
+        .map_err(|_| anyhow::anyhow!("secret environment isolation unavailable"))?;
+    let mut command = Command::new(&plan.program);
+    command.args(&plan.args);
+    for name in names.iter() {
+        command.env_remove(name);
+    }
+    Ok(command)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandPlan {
     pub program: String,
@@ -42,8 +66,7 @@ impl CommandPlan {
 }
 
 pub fn capture(plan: &CommandPlan) -> Result<String> {
-    let output = Command::new(&plan.program)
-        .args(&plan.args)
+    let output = command(plan)?
         .stdin(Stdio::null())
         .output()
         .with_context(|| format!("execute {}", plan.display_safe()))?;
@@ -58,8 +81,7 @@ pub fn capture(plan: &CommandPlan) -> Result<String> {
 /// diagnostics. Only the caller-supplied safe label and a bounded stderr tail
 /// are retained on failure.
 pub fn capture_named(plan: &CommandPlan, label: &str) -> Result<String> {
-    let output = Command::new(&plan.program)
-        .args(&plan.args)
+    let output = command(plan)?
         .stdin(Stdio::null())
         .output()
         .with_context(|| format!("execute {label}"))?;
@@ -76,8 +98,7 @@ pub fn capture_named(plan: &CommandPlan, label: &str) -> Result<String> {
 }
 
 pub fn inherit(plan: &CommandPlan) -> Result<()> {
-    let status = Command::new(&plan.program)
-        .args(&plan.args)
+    let status = command(plan)?
         .stdin(Stdio::null())
         .status()
         .with_context(|| format!("execute {}", plan.display_safe()))?;
@@ -91,8 +112,7 @@ pub fn inherit(plan: &CommandPlan) -> Result<()> {
 /// provider output. Some CLIs echo rejected input in diagnostics, so failures
 /// expose only the already-safe command plan.
 pub fn with_secret_stdin(plan: &CommandPlan, stdin: &[u8]) -> Result<()> {
-    let mut child = Command::new(&plan.program)
-        .args(&plan.args)
+    let mut child = command(plan)?
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -116,6 +136,19 @@ pub fn with_secret_stdin(plan: &CommandPlan, stdin: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ingested_secret_environment_is_removed_from_child_commands() {
+        let name = "THELVE_TEST_PROVIDER_SECRET_INPUT";
+        exclude_secret_environment(name).unwrap();
+        let child = command(&CommandPlan::new("true")).unwrap();
+        assert!(
+            child
+                .get_envs()
+                .any(|(key, value)| key == name && value.is_none())
+        );
+        assert!(child.get_args().next().is_none());
+    }
 
     #[test]
     fn named_capture_does_not_repeat_command_arguments() {
